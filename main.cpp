@@ -6,11 +6,16 @@
 #include <cstdlib>
 #include <vector>
 #include <optional>
+#include <set>
+#include <cstdint>
+#include <limits>
+#include <algorithm>
 
 const uint32_t WIDTH{ 800 };
 const uint32_t HEIGHT{ 600 };
 
 const std::vector<const char*> validationLayers{ "VK_LAYER_KHRONOS_validation" };
+const std::vector<const char*> deviceExtensions{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
 #ifdef NDEBUG
 	const bool enableValidationLayers{ false };
@@ -60,11 +65,25 @@ void DestroyDebugUtilsMessengerEXT(
 struct QueueFamilyIndices
 {
 	std::optional<uint32_t> grahicsFamily;
+	/*
+	* presentation is a queue-specific feature
+	It’s actually possible that the queue families supporting drawing commands and
+	the ones supporting presentation do not overlap. Therefore we have to take into
+	account that there could be a distinct presentation queue
+	*/
+	std::optional<uint32_t> presentFamily;
 
 	bool isComplete()
 	{
-		return grahicsFamily.has_value();
+		return grahicsFamily.has_value() && presentFamily.has_value();
 	}
+};
+
+struct SwapChainSupportDetails
+{
+	VkSurfaceCapabilitiesKHR capabilities;
+	std::vector<VkSurfaceFormatKHR> formats;
+	std::vector<VkPresentModeKHR> presentModes;
 };
 
 
@@ -83,9 +102,11 @@ private:
 	GLFWwindow* window;
 	VkInstance instance;
 	VkDebugUtilsMessengerEXT debugMessenger;
+	VkSurfaceKHR surface;
 	VkPhysicalDevice physicalDevice{ VK_NULL_HANDLE };
 	VkDevice device;
 	VkQueue graphicsQueue;
+	VkQueue presentQueue;
 
 	void initWindow()
 	{
@@ -270,6 +291,12 @@ private:
 			{
 				indices.grahicsFamily = i;
 			}
+			VkBool32 presentSupport{ false };
+			vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+			if (presentSupport)
+			{
+				indices.presentFamily = i;
+			}
 			if (indices.isComplete())
 			{
 				break;
@@ -279,10 +306,134 @@ private:
 		return indices;
 	}
 
+	bool checkDeviceExtensionSupport(VkPhysicalDevice device)
+	{
+		uint32_t extensionsCount{ 0 };
+		vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionsCount, nullptr);
+		std::vector<VkExtensionProperties> availableExtensions(extensionsCount);
+		vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionsCount, availableExtensions.data());
+		for (const auto& extension : deviceExtensions)
+		{
+			bool found{ false };
+
+			for (const auto& availableExtension : availableExtensions)
+			{
+				if (strcmp(extension, availableExtension.extensionName) == 0)
+				{
+					found = true;
+					break;
+				}
+			}
+			if (!found)
+			{
+				std::cerr << "Missing device extension: " << extension << std::endl;
+				return false;
+			}
+		}
+		return true;
+	}
+
+	SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device)
+	{
+		SwapChainSupportDetails details;
+		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
+		uint32_t formatCount{ 0 };
+		vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
+		if (formatCount != 0)
+		{
+			details.formats.resize(formatCount);
+			vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
+		}
+		uint32_t presentModeCount{ 0 };
+		vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
+		if (presentModeCount != 0)
+		{
+			details.presentModes.resize(presentModeCount);
+			vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
+		}
+		return details;
+	}
+
+	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
+	{
+		for (const auto& availableFormat : availableFormats)
+		{
+			if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB &&
+				availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+			{
+				return availableFormat;
+			}
+		}
+		return availableFormats[0];
+	}
+
+	VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes)
+	{
+		for (const auto& availablePresentMode : availablePresentModes)
+		{
+			if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR)
+			{
+				return availablePresentMode;
+			}
+		}
+		return VK_PRESENT_MODE_FIFO_KHR;
+	}
+
+	/*
+	GLFW uses two units when measuring sizes: pixels and screen coordinates. For
+	example, the resolution {WIDTH, HEIGHT} that we specified earlier when creating
+	the window is measured in screen coordinates. But Vulkan works with
+	pixels, so the swap chain extent must be specified in pixels as well. Unfortunately,
+	if you are using a high DPI display (like Apple’s Retina display), screen
+	coordinates don’t correspond to pixels. Instead, due to the higher pixel density,
+	the resolution of the window in pixel will be larger than the resolution in screen
+	coordinates. So if Vulkan doesn’t fix the swap extent for us, we can’t just use
+	the original {WIDTH, HEIGHT}. Instead, we must use glfwGetFramebufferSize
+	to query the resolution of the window in pixel before matching it against the
+	minimum and maximum image extent.
+	*/
+	VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities)
+	{
+		if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+		{
+			return capabilities.currentExtent;
+		}
+		else
+		{
+			int width;
+			int height;
+			glfwGetFramebufferSize(window, &width, &height);
+			VkExtent2D actualExtent{
+				static_cast<uint32_t>(width),
+				static_cast<uint32_t>(height),
+			};
+			actualExtent.width = std::clamp(
+				actualExtent.width,
+				capabilities.minImageExtent.width,
+				capabilities.maxImageExtent.width
+			);
+			actualExtent.height = std::clamp(
+				actualExtent.height,
+				capabilities.minImageExtent.height,
+				capabilities.maxImageExtent.height
+			);
+			return actualExtent;
+		}
+	}
+
 	bool isDeviceSuitable(VkPhysicalDevice device)
 	{
 		QueueFamilyIndices indices{ findQueueFamilies(device) };
-		return indices.isComplete();
+		bool extensionsSupported{ checkDeviceExtensionSupport(device) };
+		bool swapChainAdequate{ false };
+		if (extensionsSupported)
+		{
+			SwapChainSupportDetails swapChainSupport{ querySwapChainSupport(device) };
+			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
+		}
+		
+
+		return indices.isComplete() && extensionsSupported && swapChainAdequate;
 	}
 
 	void pickPhysicalDevice()
@@ -312,21 +463,39 @@ private:
 
 	void createLogicalDevice()
 	{
+		/*
+		When creating the logical device, you need to create one or more queues.
+		If graphics and presentation are supported by the same queue family, you only need to create one queue.
+		But if they’re in different families, you need one for each.
+		*/
 		QueueFamilyIndices indices{ findQueueFamilies(physicalDevice) };
-		VkDeviceQueueCreateInfo queueCreateInfo{};
-		queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-		queueCreateInfo.queueFamilyIndex = indices.grahicsFamily.value();
-		queueCreateInfo.queueCount = 1;
+
+		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+		std::set<uint32_t> uniqueQueueFamilies{ {
+				indices.grahicsFamily.value(),
+				indices.presentFamily.value()
+		} };
 		float queuePriority{ 1.0f };
-		queueCreateInfo.pQueuePriorities = &queuePriority;
+		for (uint32_t queueFamily : uniqueQueueFamilies)
+		{
+			VkDeviceQueueCreateInfo queueCreateInfo{};
+			queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+			queueCreateInfo.queueFamilyIndex = queueFamily;
+			queueCreateInfo.queueCount = 1;
+			queueCreateInfo.pQueuePriorities = &queuePriority;
+			queueCreateInfos.push_back(queueCreateInfo);
+		}
+		
 
 		VkPhysicalDeviceFeatures deviceFeatures{};
 
 		VkDeviceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-		createInfo.pQueueCreateInfos = &queueCreateInfo;
-		createInfo.queueCreateInfoCount = 1;
+		createInfo.pQueueCreateInfos = queueCreateInfos.data();
+		createInfo.queueCreateInfoCount = queueCreateInfos.size();
 		createInfo.pEnabledFeatures = &deviceFeatures;
+		createInfo.enabledExtensionCount = deviceExtensions.size();
+		createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 		/*
 		Previous implementations of Vulkan made a distinction between instance and device
 		specific validation layers, but this is no longer the case. That means that the
@@ -351,12 +520,22 @@ private:
 		}
 
 		vkGetDeviceQueue(device, indices.grahicsFamily.value(), 0, &graphicsQueue);
+		vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+	}
+
+	void createSurface()
+	{
+		if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create window surface!");
+		}
 	}
 
 	void initVulkan()
 	{
 		createInstance();
 		setupDebugMessenger();
+		createSurface();
 		pickPhysicalDevice();
 		createLogicalDevice();
 	}
@@ -376,6 +555,7 @@ private:
 		{
 			DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
 		}
+		vkDestroySurfaceKHR(instance, surface, nullptr);
 		vkDestroyInstance(instance, nullptr);
 		glfwDestroyWindow(window);
 		glfwTerminate();
