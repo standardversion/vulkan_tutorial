@@ -107,6 +107,11 @@ private:
 	VkDevice device;
 	VkQueue graphicsQueue;
 	VkQueue presentQueue;
+	VkSwapchainKHR swapChain;
+	std::vector<VkImage> swapChainImages;
+	VkFormat swapChainImageFormat;
+	VkExtent2D swapChainExtent;
+	std::vector<VkImageView> swapChainImageViews;
 
 	void initWindow()
 	{
@@ -503,7 +508,6 @@ private:
 		are ignored by up-to-date implementations. However, it is still a good idea to
 		set them anyway to be compatible with older implementations
 		*/
-		createInfo.enabledExtensionCount = 0;
 		if (enableValidationLayers)
 		{
 			createInfo.enabledLayerCount = validationLayers.size();
@@ -531,6 +535,155 @@ private:
 		}
 	}
 
+	void createSwapChain()
+	{
+		SwapChainSupportDetails swapChainSupport{ querySwapChainSupport(physicalDevice) };
+		VkSurfaceFormatKHR surfaceFormat{ chooseSwapSurfaceFormat(swapChainSupport.formats) };
+		VkPresentModeKHR presentMode{ chooseSwapPresentMode(swapChainSupport.presentModes) };
+		VkExtent2D extent{ chooseSwapExtent(swapChainSupport.capabilities) };
+		/*
+		simply sticking to this minimum means that we may sometimes have
+		to wait on the driver to complete internal operations before we can acquire
+		another image to render to. Therefore it is recommended to request at least one
+		more image than the minimum:
+		*/
+		uint32_t imageCount{ swapChainSupport.capabilities.minImageCount + 1 };
+		if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount)
+		{
+			imageCount = swapChainSupport.capabilities.maxImageCount;
+		}
+
+		VkSwapchainCreateInfoKHR createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+		createInfo.surface = surface;
+		createInfo.minImageCount = imageCount;
+		createInfo.imageFormat = surfaceFormat.format;
+		createInfo.imageColorSpace = surfaceFormat.colorSpace;
+		createInfo.imageExtent = extent;
+		/*
+		The imageArrayLayers specifies the amount of layers each image consists of.
+		This is always 1 unless you are developing a stereoscopic 3D application. The
+		imageUsage bit field specifies what kind of operations we’ll use the images in
+		the swap chain for. We’re going to render directly to them, which
+		means that they’re used as color attachment. It is also possible that you’ll render
+		images to a separate image first to perform operations like post-processing. In
+		that case you may use a value like VK_IMAGE_USAGE_TRANSFER_DST_BIT instead
+		and use a memory operation to transfer the rendered image to a swap chain
+		image.
+		*/
+		createInfo.imageArrayLayers = 1;
+		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+		/*
+		we need to specify how to handle swap chain images that will be used
+		across multiple queue families. That will be the case in our application if the
+		graphics queue family is different from the presentation queue. We’ll be drawing
+		on the images in the swap chain from the graphics queue and then submitting
+		them on the presentation queue. There are two ways to handle images that are
+		accessed from multiple queues:
+		• VK_SHARING_MODE_EXCLUSIVE: An image is owned by one queue family
+		at a time and ownership must be explicitly transferred before using it in
+		another queue family. This option offers the best performance.
+		• VK_SHARING_MODE_CONCURRENT: Images can be used across multiple queue
+		families without explicit ownership transfers.
+		*/
+		QueueFamilyIndices indices{ findQueueFamilies(physicalDevice) };
+		uint32_t queueFamilyIndices[]{ indices.grahicsFamily.value(), indices.presentFamily.value() };
+		if (indices.grahicsFamily != indices.presentFamily)
+		{
+			createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+			createInfo.queueFamilyIndexCount = 2;
+			createInfo.pQueueFamilyIndices = queueFamilyIndices;
+		}
+		else
+		{
+			createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			createInfo.queueFamilyIndexCount = 0;
+			createInfo.pQueueFamilyIndices = nullptr;
+		}
+		/*
+		We can specify that a certain transform should be applied to images in the
+		swap chain if it is supported (supportedTransforms in capabilities), like a
+		90 degree clockwise rotation or horizontal flip. To specify that you do not want
+		any transformation, simply specify the current transformation.
+		*/
+		createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+		/*
+		The compositeAlpha field specifies if the alpha channel should be used for blending
+		with other windows in the window system. You’ll almost always want to
+		simply ignore the alpha channel, hence VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+		*/
+		createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+		createInfo.presentMode = presentMode;
+		createInfo.clipped = VK_TRUE;
+		/*
+		With Vulkan it’s possible that your
+		swap chain becomes invalid or unoptimized while your application is running, for
+		example because the window was resized. In that case the swap chain actually
+		needs to be recreated from scratch and a reference to the old one must be
+		specified in this field. This is a complex topic that we’ll learn more about in a
+		future chapter. For now we’ll assume that we’ll only ever create one swap chain.
+		*/
+		createInfo.oldSwapchain = VK_NULL_HANDLE;
+		if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create swap chain!");
+		}
+		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
+		swapChainImages.resize(imageCount);
+		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
+		swapChainImageFormat = surfaceFormat.format;
+		swapChainExtent = extent;
+	}
+
+	void createImageViews()
+	{
+		swapChainImageViews.resize(swapChainImages.size());
+		for (size_t i{ 0 }; i < swapChainImages.size(); i++)
+		{
+			VkImageViewCreateInfo createInfo{};
+			createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+			createInfo.image = swapChainImages[i];
+			/*
+			The viewType and format fields specify how the image data should be interpreted.
+			The viewType parameter allows you to treat images as 1D textures, 2D
+			textures, 3D textures and cube maps.
+			*/
+			createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+			createInfo.format = swapChainImageFormat;
+			/*
+			The components field allows you to swizzle the color channels around. For
+			example, you can map all of the channels to the red channel for a monochrome
+			texture. You can also map constant values of 0 and 1 to a channel. In our case
+			we’ll stick to the default mapping.
+			*/
+			createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+			createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+			createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+			createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+			/*
+			The subresourceRange field describes what the image’s purpose is and which
+			part of the image should be accessed. Our images will be used as color targets
+			without any mipmapping levels or multiple layers.
+			*/
+			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			createInfo.subresourceRange.baseMipLevel = 0;
+			createInfo.subresourceRange.levelCount = 1;
+			createInfo.subresourceRange.baseArrayLayer = 0;
+			createInfo.subresourceRange.layerCount = 1;
+			/*
+			If you were working on a stereographic 3D application, then you would create
+			a swap chain with multiple layers. You could then create multiple image views
+			for each image representing the views for the left and right eyes by accessing
+			different layers.
+			*/
+			if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to create image views!");
+			}
+		}
+	}
+
 	void initVulkan()
 	{
 		createInstance();
@@ -538,6 +691,8 @@ private:
 		createSurface();
 		pickPhysicalDevice();
 		createLogicalDevice();
+		createSwapChain();
+		createImageViews();
 	}
 
 	void mainLoop()
@@ -550,6 +705,11 @@ private:
 
 	void cleanup()
 	{
+		for (auto imageView : swapChainImageViews)
+		{
+			vkDestroyImageView(device, imageView, nullptr);
+		}
+		vkDestroySwapchainKHR(device, swapChain, nullptr);
 		vkDestroyDevice(device, nullptr);
 		if (enableValidationLayers)
 		{
