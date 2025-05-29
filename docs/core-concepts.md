@@ -124,3 +124,6 @@ Framebuffer = *where to draw (image view)*.
 | **Sync & Loop**    | `vkCreateSemaphore`, `vkCreateFence`, draw loop         | Coordinates frame timing                      |
 
 ---
+
+# Diagram
+[core-concepts](./diagrams/core-concepts.md)
