@@ -8,3 +8,4 @@ This repo works through https://vulkan-tutorial.com/
 - [Conceptual Vulkan Groups](docs/core-concepts.md)
 - [Vertex and Index Buffers](docs/vertex-index-buffers.md)
 - [Uniform Buffers and Descriptor Sets](docs/uniform-buffers-descriptor-sets.md)
+- [Texture Mapping](docs/texture-mapping.md)
