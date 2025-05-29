@@ -5,5 +5,6 @@ This repo works through https://vulkan-tutorial.com/
 ## Documentation
 
 - [Boilerplate Code Breakdown](docs/boilerplate.md)
-- [Conceptual Vulkan Groups](docs/concepts.md)
-- [Diagrams](docs/diagrams.md)
+- [Conceptual Vulkan Groups](docs/core-concepts.md)
+- [Vertex and Index Buffers](docs/vertex-index-buffers.md)
+- [Uniform Buffers and Descriptor Sets](docs/uniform-buffers-descriptor-sets.md)
