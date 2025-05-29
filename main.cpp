@@ -1,9 +1,11 @@
+Ôªø#define STB_IMAGE_IMPLEMENTATION
 #define GLFW_INCLUDE_VULKAN
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <stb_image.h>
 
 #include <chrono>
 #include <iostream>
@@ -21,12 +23,12 @@
 const uint32_t WIDTH{ 800 };
 const uint32_t HEIGHT{ 600 };
 /*
-We choose the number 2 because we donít want the CPU to get too far ahead
+We choose the number 2 because we don‚Äôt want the CPU to get too far ahead
 of the GPU. With 2 frames in flight, the CPU and the GPU can be working
 on their own tasks at the same time. If the CPU finishes early, it will wait
 till the GPU finishes rendering before submitting more work. With 3 or more
 frames in flight, the CPU could get ahead of the GPU, adding frames of latency.
-Generally, extra latency isnít desired.
+Generally, extra latency isn‚Äôt desired.
 */
 const int MAX_FRAMES_IN_FLIGHT{ 2 };
 //All of the useful standard validation is bundled into
@@ -42,12 +44,12 @@ struct UniformBufferObject
 
 	Vulkan expects the data in your structure to be aligned in memory in a specific
 	way, for example:
-	ï Scalars have to be aligned by N (= 4 bytes given 32 bit floats).
-	ï A vec2 must be aligned by 2N (= 8 bytes)
-	ï A vec3 or vec4 must be aligned by 4N (= 16 bytes)
-	ï A nested structure must be aligned by the base alignment of its members
+	‚Ä¢ Scalars have to be aligned by N (= 4 bytes given 32 bit floats).
+	‚Ä¢ A vec2 must be aligned by 2N (= 8 bytes)
+	‚Ä¢ A vec3 or vec4 must be aligned by 4N (= 16 bytes)
+	‚Ä¢ A nested structure must be aligned by the base alignment of its members
 	rounded up to a multiple of 16.
-	ï A mat4 matrix must have the same alignment as a vec4.
+	‚Ä¢ A mat4 matrix must have the same alignment as a vec4.
 	You can find the full list of alignment requirements in the specification.
 	*/
 	alignas(16) glm::mat4 model;
@@ -59,6 +61,7 @@ struct Vertex
 {
 	glm::vec2 pos;
 	glm::vec3 color;
+	glm::vec2 texCoord;
 
 	static VkVertexInputBindingDescription getBindingDescription()
 	{
@@ -69,14 +72,14 @@ struct Vertex
 		*/
 		VkVertexInputBindingDescription bindingDescription{};
 		/*
-		All of our per-vertex data is packed together in one array, so weíre only going
+		All of our per-vertex data is packed together in one array, so we‚Äôre only going
 		to have one binding. The binding parameter specifies the index of the binding
 		in the array of bindings. The stride parameter specifies the number of bytes
 		from one entry to the next, and the inputRate parameter can have one of the
 		following values:
-		ï VK_VERTEX_INPUT_RATE_VERTEX: Move to the next data entry after each
+		‚Ä¢ VK_VERTEX_INPUT_RATE_VERTEX: Move to the next data entry after each
 		vertex
-		ï VK_VERTEX_INPUT_RATE_INSTANCE: Move to the next data entry after
+		‚Ä¢ VK_VERTEX_INPUT_RATE_INSTANCE: Move to the next data entry after
 		each instance
 		*/
 		bindingDescription.binding = 0;
@@ -85,9 +88,9 @@ struct Vertex
 		return bindingDescription;
 	}
 
-	static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescription()
+	static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescription()
 	{
-		std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+		std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
 		/*
 		The binding parameter tells Vulkan from which binding the per-vertex data
 		comes. The location parameter references the location directive of the input
@@ -96,10 +99,10 @@ struct Vertex
 		The format parameter describes the type of data for the attribute. A bit confusingly,
 		the formats are specified using the same enumeration as color formats.
 		The following shader types and formats are commonly used together:
-		ï float: VK_FORMAT_R32_SFLOAT
-		ï vec2: VK_FORMAT_R32G32_SFLOAT
-		ï vec3: VK_FORMAT_R32G32B32_SFLOAT
-		ï vec4: VK_FORMAT_R32G32B32A32_SFLOAT
+		‚Ä¢ float: VK_FORMAT_R32_SFLOAT
+		‚Ä¢ vec2: VK_FORMAT_R32G32_SFLOAT
+		‚Ä¢ vec3: VK_FORMAT_R32G32B32_SFLOAT
+		‚Ä¢ vec4: VK_FORMAT_R32G32B32A32_SFLOAT
 		As you can see, you should use the format where the amount of color channels
 		matches the number of components in the shader data type. It is allowed to
 		use more channels than the number of components in the shader, but they will
@@ -107,11 +110,11 @@ struct Vertex
 		components, then the BGA components will use default values of (0, 0, 1).
 		The color type (SFLOAT, UINT, SINT) and bit width should also match the type
 		of the shader input. See the following examples:
-		ï ivec2: VK_FORMAT_R32G32_SINT, a 2-component vector of 32-bit signed
+		‚Ä¢ ivec2: VK_FORMAT_R32G32_SINT, a 2-component vector of 32-bit signed
 		integers
-		ï uvec4: VK_FORMAT_R32G32B32A32_UINT, a 4-component vector of 32-bit
+		‚Ä¢ uvec4: VK_FORMAT_R32G32B32A32_UINT, a 4-component vector of 32-bit
 		unsigned integers
-		ï double: VK_FORMAT_R64_SFLOAT, a double-precision (64-bit) float
+		‚Ä¢ double: VK_FORMAT_R64_SFLOAT, a double-precision (64-bit) float
 		The format parameter implicitly defines the byte size of attribute data and the
 		offset parameter specifies the number of bytes since the start of the per-vertex
 		data to read from. The binding is loading one Vertex at a time and the position
@@ -126,15 +129,20 @@ struct Vertex
 		attributeDescriptions[1].location = 1;
 		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+		attributeDescriptions[2].binding = 0;
+		attributeDescriptions[2].location = 2;
+		attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+		attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
 		return attributeDescriptions;
 	}
 };
 
 std::vector<Vertex> vertices{
-	{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-	{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-	{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-	{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+	{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+	{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+	{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+	{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
 };
 
 /*
@@ -144,7 +152,7 @@ upper-right triangle and bottom-left triangle.
 (vertex indices)
 It is possible to use either uint16_t or uint32_t for your index buffer depending
 on the number of entries in vertices. We can stick to uint16_t for now because
-weíre using less than 65535 unique vertices.
+we‚Äôre using less than 65535 unique vertices.
 */
 const std::vector<uint16_t> indices{ 0, 1, 2, 2, 3, 0 };
 
@@ -198,7 +206,7 @@ struct QueueFamilyIndices
 	std::optional<uint32_t> grahicsFamily;
 	/*
 	* presentation is a queue-specific feature
-	Itís actually possible that the queue families supporting drawing commands and
+	It‚Äôs actually possible that the queue families supporting drawing commands and
 	the ones supporting presentation do not overlap. Therefore we have to take into
 	account that there could be a distinct presentation queue
 	*/
@@ -264,6 +272,10 @@ private:
 	std::vector<VkFence> inFlightFences;
 	bool framebufferResized{ false };
 	uint32_t currentFrame{ 0 };
+	VkImage textureImage;
+	VkDeviceMemory textureImageMemory;
+	VkImageView textureImageView;
+	VkSampler textureSampler;
 
 	void initWindow()
 	{
@@ -308,7 +320,7 @@ private:
 		Create a logical device to interface with the physical device.
 		The logical device creation process is similar to the instance
 		creation process and describes the features we want to use. We also need to
-		specify which queues to create now that weíve queried which queue families are
+		specify which queues to create now that we‚Äôve queried which queue families are
 		available. You can even create multiple logical devices from the same physical
 		device if you have varying requirements.
 		*/
@@ -333,7 +345,7 @@ private:
 		how many color and depth buffers there will be, how many samples to use
 		for each of them and how their contents should be handled throughout the
 		rendering operations. All of this information is wrapped in a render pass object,
-		for which weíll create a new createRenderPass function.
+		for which we‚Äôll create a new createRenderPass function.
 		*/
 		createRenderPass();
 		/*
@@ -373,16 +385,77 @@ private:
 		buffers are allocated from them.
 		*/
 		createCommandPool();
+		/*
+		Adding a texture to our application will involve the following steps:
+		‚Ä¢ Create an image object backed by device memory
+		‚Ä¢ Fill it with pixels from an image file
+		‚Ä¢ Create an image sampler
+		‚Ä¢ Add a combined image sampler descriptor to sample colors from the texture
+		*/
+		createTextureImage();
+		/*
+		with the swap chain images and the framebuffer, that images
+		are accessed through image views rather than directly. We will also need to
+		create such an image view for the texture image.
+		*/
+		createTextureImageView();
+		/*
+		It is possible for shaders to read texels directly from images, but that is not very
+		common when they are used as textures. Textures are usually accessed through
+		samplers, which will apply filtering and transformations to compute the final
+		color that is retrieved.
+		*/
+		createTextureSampler();
+		/*
+		Buffers in Vulkan are regions of memory used for storing arbitrary data that can
+		be read by the graphics card. They can be used to store vertex data but they can
+		also be used for many other purposes. Unlike the Vulkan objects buffers do not
+		automatically allocate memory for themselves.
+		*/
 		createVertexBuffer();
+		/*
+		Drawing a rectangle takes two triangles, which means that we need a vertex
+		buffer with 6 vertices. The problem is that the data of two vertices needs to be
+		duplicated resulting in 50% redundancy. It only gets worse with more complex
+		meshes, where vertices are reused in an average number of 3 triangles. The
+		solution to this problem is to use an index buffer.
+		An index buffer is essentially an array of pointers into the vertex buffer. It allows
+		you to reorder the vertex data, and reuse existing data for multiple vertices.
+		*/
 		createIndexBuffer();
+		/*
+		A descriptor is a way for shaders to freely access resources like buffers and images. We‚Äôre
+		going to set up a buffer that contains the transformation matrices and have the
+		vertex shader access them through a descriptor. Usage of descriptors consists
+		of three parts:
+		‚Ä¢ Specify a descriptor layout during pipeline creation
+		‚Ä¢ Allocate a descriptor set from a descriptor pool
+		‚Ä¢ Bind the descriptor set during rendering
+		The descriptor layout specifies the types of resources that are going to be accessed
+		by the pipeline, just like a render pass specifies the types of attachments
+		that will be accessed. A descriptor set specifies the actual buffer or image resources
+		that will be bound to the descriptors, just like a framebuffer specifies
+		the actual image views to bind to render pass attachments. The descriptor
+		set is then bound for the drawing commands just like the vertex buffers and
+		framebuffer.
+		*/
 		createUniformBuffers();
 		/*
-		Descriptor sets canít be created directly, they must be allocated from a pool like
+		Descriptor sets can‚Äôt be created directly, they must be allocated from a pool like
 		command buffers. The equivalent for descriptor sets is unsurprisingly called a
 		descriptor pool.
 		*/
 		createDescriptorPool();
 		createDescriptorSets();
+		/*
+		Commands in Vulkan, like drawing operations and memory transfers, are not
+		executed directly using function calls. You have to record all of the operations
+		you want to perform in command buffer objects. The advantage of this is
+		that when we are ready to tell the Vulkan what we want to do, all of the
+		commands are submitted together and Vulkan can more efficiently process the
+		commands since all of them are available together. In addition, this allows
+		command recording to happen in multiple threads if so desired.
+		*/
 		createCommandBuffers();
 
 		createSyncObjects();
@@ -402,6 +475,10 @@ private:
 	void cleanup()
 	{
 		cleanupSwapChain();
+		vkDestroySampler(device, textureSampler, nullptr);
+		vkDestroyImageView(device, textureImageView, nullptr);
+		vkDestroyImage(device, textureImage, nullptr);
+		vkFreeMemory(device, textureImageMemory, nullptr);
 		//The uniform data will be used for all draw calls, so the buffer containing it
 		//should only be destroyed when we stop rendering.
 		for (size_t i{ 0 }; i < MAX_FRAMES_IN_FLIGHT; i++)
@@ -428,7 +505,7 @@ private:
 
 		vkDestroyCommandPool(device, commandPool, nullptr);
 		
-		//Logical devices donít interact directly with instances, which is why itís not included as a parameter.
+		//Logical devices don‚Äôt interact directly with instances, which is why it‚Äôs not included as a parameter.
 		vkDestroyDevice(device, nullptr);
 		if (enableValidationLayers)
 		{
@@ -437,7 +514,7 @@ private:
 			//the function needs to be explicitly loaded.
 			DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
 		}
-		//GLFW doesnít offer a special function for destroying a surface, 
+		//GLFW doesn‚Äôt offer a special function for destroying a surface, 
 		//but that can easily be done through the original API
 		//Make sure that the surface is destroyed before the instance.
 		vkDestroySurfaceKHR(instance, surface, nullptr);
@@ -451,7 +528,7 @@ private:
 	void cleanupSwapChain()
 	{
 		//delete the framebuffers before the image views and render pass that
-		//they are based on, but only after weíve finished rendering
+		//they are based on, but only after we‚Äôve finished rendering
 		for (auto framebuffer : swapChainFramebuffers)
 		{
 			vkDestroyFramebuffer(device, framebuffer, nullptr);
@@ -499,7 +576,7 @@ private:
 
 		/*
 		To retrieve a list of supported extensions before creating an instance,
-		thereís the vkEnumerateInstanceExtensionProperties function.
+		there‚Äôs the vkEnumerateInstanceExtensionProperties function.
 		*/
 		uint32_t extenstionCount{ 0 };
 		//first arg is to filter, last arg is to store
@@ -519,18 +596,18 @@ private:
 		the API by default. Even mistakes as simple as setting enumerations to incorrect
 		values or passing null pointers to required parameters are generally not explicitly
 		handled and will simply result in crashes or undefined behavior. Because Vulkan
-		requires you to be very explicit about everything youíre doing, itís easy to make
+		requires you to be very explicit about everything you‚Äôre doing, it‚Äôs easy to make
 		many small mistakes like using a new GPU feature and forgetting to request it
 		at logical device creation time.
-		However, that doesnít mean that these checks canít be added to the API. Vulkan
+		However, that doesn‚Äôt mean that these checks can‚Äôt be added to the API. Vulkan
 		introduces an elegant system for this known as validation layers. Validation
 		layers are optional components that hook into Vulkan function calls to apply
 		additional operations. Common operations in validation layers are:
-		ï Checking the values of parameters against the specification to detect misuse
-		ï Tracking creation and destruction of objects to find resource leaks
-		ï Checking thread safety by tracking the threads that calls originate from
-		ï Logging every call and its parameters to the standard output
-		ï Tracing Vulkan calls for profiling and replaying
+		‚Ä¢ Checking the values of parameters against the specification to detect misuse
+		‚Ä¢ Tracking creation and destruction of objects to find resource leaks
+		‚Ä¢ Checking thread safety by tracking the threads that calls originate from
+		‚Ä¢ Logging every call and its parameters to the standard output
+		‚Ä¢ Tracing Vulkan calls for profiling and replaying
 		*/
 		// check validation layer support
 		// The debugCreateInfo variable is placed outside the if statement to ensure
@@ -722,7 +799,7 @@ private:
 		if (extensionsSupported)
 		{
 			/*
-			Vulkan does not have the concept of a ìdefault framebufferî, hence it requires
+			Vulkan does not have the concept of a ‚Äúdefault framebuffer‚Äù, hence it requires
 			an infrastructure that will own the buffers we will render to before we visualize
 			them on the screen. This infrastructure is known as the swap chain and must
 			be created explicitly in Vulkan. The swap chain is essentially a queue of images
@@ -735,9 +812,10 @@ private:
 			SwapChainSupportDetails swapChainSupport{ querySwapChainSupport(device) };
 			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 		}
+		VkPhysicalDeviceFeatures supportedFeatures;
+		vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
 
-
-		return indices.isComplete() && extensionsSupported && swapChainAdequate;
+		return indices.isComplete() && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
 	}
 
 	QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
@@ -788,7 +866,7 @@ private:
 	{
 		/*
 		Not all graphics cards are capable of presenting images directly to a screen for
-		various reasons, for example because they are designed for servers and donít
+		various reasons, for example because they are designed for servers and don‚Äôt
 		have any display outputs. Secondly, since image presentation is heavily tied
 		into the window system and the surfaces associated with windows, it is not
 		actually part of the Vulkan core. You have to enable the VK_KHR_swapchain
@@ -825,12 +903,12 @@ private:
 		Just checking if a swap chain is available is not sufficient, because it may not
 		actually be compatible with our window surface. Creating a swap chain also
 		involves a lot more settings than instance and device creation, so we need to
-		query for some more details before weíre able to proceed.
+		query for some more details before we‚Äôre able to proceed.
 		There are basically three kinds of properties we need to check:
-		ï Basic surface capabilities (min/max number of images in swap chain, min/-
+		‚Ä¢ Basic surface capabilities (min/max number of images in swap chain, min/-
 		max width and height of images)
-		ï Surface formats (pixel format, color space)
-		ï Available presentation modes
+		‚Ä¢ Surface formats (pixel format, color space)
+		‚Ä¢ Available presentation modes
 		*/
 		SwapChainSupportDetails details;
 		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
@@ -856,7 +934,7 @@ private:
 		/*
 		When creating the logical device, you need to create one or more queues.
 		If graphics and presentation are supported by the same queue family, you only need to create one queue.
-		But if theyíre in different families, you need one for each.
+		But if they‚Äôre in different families, you need one for each.
 		*/
 		QueueFamilyIndices indices{ findQueueFamilies(physicalDevice) };
 
@@ -868,7 +946,7 @@ private:
 		} };
 		/*
 		The currently available drivers will only allow you to create a small number of
-		queues for each queue family and you donít really need more than one. Thatís
+		queues for each queue family and you don‚Äôt really need more than one. That‚Äôs
 		because you can create all of the command buffers on multiple threads and then
 		submit them all at once on the main thread with a single low-overhead call.
 		Vulkan lets you assign priorities to queues to influence the scheduling of command
@@ -887,13 +965,14 @@ private:
 		}
 
 		/*
-		The next information to specify is the set of device features that weíll
+		The next information to specify is the set of device features that we‚Äôll
 		be using. These are the features that we queried support for with
 		vkGetPhysicalDeviceFeatures, like geometry
-		shaders. Right now we donít need anything special, so we can simply define
+		shaders. Right now we don‚Äôt need anything special, so we can simply define
 		it and leave everything to VK_FALSE.
 		*/
 		VkPhysicalDeviceFeatures deviceFeatures{};
+		deviceFeatures.samplerAnisotropy = VK_TRUE;
 
 		VkDeviceCreateInfo createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -961,9 +1040,9 @@ private:
 		/*
 		The imageArrayLayers specifies the amount of layers each image consists of.
 		This is always 1 unless you are developing a stereoscopic 3D application. The
-		imageUsage bit field specifies what kind of operations weíll use the images in
-		the swap chain for. Weíre going to render directly to them, which
-		means that theyíre used as color attachment. It is also possible that youíll render
+		imageUsage bit field specifies what kind of operations we‚Äôll use the images in
+		the swap chain for. We‚Äôre going to render directly to them, which
+		means that they‚Äôre used as color attachment. It is also possible that you‚Äôll render
 		images to a separate image first to perform operations like post-processing. In
 		that case you may use a value like VK_IMAGE_USAGE_TRANSFER_DST_BIT instead
 		and use a memory operation to transfer the rendered image to a swap chain
@@ -975,14 +1054,14 @@ private:
 		/*
 		we need to specify how to handle swap chain images that will be used
 		across multiple queue families. That will be the case in our application if the
-		graphics queue family is different from the presentation queue. Weíll be drawing
+		graphics queue family is different from the presentation queue. We‚Äôll be drawing
 		on the images in the swap chain from the graphics queue and then submitting
 		them on the presentation queue. There are two ways to handle images that are
 		accessed from multiple queues:
-		ï VK_SHARING_MODE_EXCLUSIVE: An image is owned by one queue family
+		‚Ä¢ VK_SHARING_MODE_EXCLUSIVE: An image is owned by one queue family
 		at a time and ownership must be explicitly transferred before using it in
 		another queue family. This option offers the best performance.
-		ï VK_SHARING_MODE_CONCURRENT: Images can be used across multiple queue
+		‚Ä¢ VK_SHARING_MODE_CONCURRENT: Images can be used across multiple queue
 		families without explicit ownership transfers.
 		*/
 		QueueFamilyIndices indices{ findQueueFamilies(physicalDevice) };
@@ -1008,19 +1087,19 @@ private:
 		createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
 		/*
 		The compositeAlpha field specifies if the alpha channel should be used for blending
-		with other windows in the window system. Youíll almost always want to
+		with other windows in the window system. You‚Äôll almost always want to
 		simply ignore the alpha channel, hence VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
 		*/
 		createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 		createInfo.presentMode = presentMode;
 		createInfo.clipped = VK_TRUE;
 		/*
-		With Vulkan itís possible that your
+		With Vulkan it‚Äôs possible that your
 		swap chain becomes invalid or unoptimized while your application is running, for
 		example because the window was resized. In that case the swap chain actually
 		needs to be recreated from scratch and a reference to the old one must be
-		specified in this field. This is a complex topic that weíll learn more about in a
-		future chapter. For now weíll assume that weíll only ever create one swap chain.
+		specified in this field. This is a complex topic that we‚Äôll learn more about in a
+		future chapter. For now we‚Äôll assume that we‚Äôll only ever create one swap chain.
 		*/
 		createInfo.oldSwapchain = VK_NULL_HANDLE;
 		if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS)
@@ -1045,9 +1124,9 @@ private:
 		not using the VK_COLOR_SPACE_SRGB_NONLINEAR_KHR flag. Note that this flag
 		used to be called VK_COLORSPACE_SRGB_NONLINEAR_KHR in old versions of the
 		specification.
-		For the color space weíll use SRGB if it is available, because it results in more
+		For the color space we‚Äôll use SRGB if it is available, because it results in more
 		accurate perceived colors. It is also pretty much the standard color space
-		for images, like the textures weíll use later on. Because of that we should
+		for images, like the textures we‚Äôll use later on. Because of that we should
 		also use an SRGB color format, of which one of the most common ones is
 		VK_FORMAT_B8G8R8A8_SRGB.
 		*/
@@ -1068,25 +1147,25 @@ private:
 		The presentation mode is arguably the most important
 		setting for the swap chain, because it represents the actual conditions for showing
 		images to the screen. There are four possible modes available in Vulkan:
-		ï VK_PRESENT_MODE_IMMEDIATE_KHR: Images submitted by your application
+		‚Ä¢ VK_PRESENT_MODE_IMMEDIATE_KHR: Images submitted by your application
 		are transferred to the screen right away, which may result in tearing.
-		ï VK_PRESENT_MODE_FIFO_KHR: The swap chain is a queue where the display
+		‚Ä¢ VK_PRESENT_MODE_FIFO_KHR: The swap chain is a queue where the display
 		takes an image from the front of the queue when the display is refreshed
 		and the program inserts rendered images at the back of the queue. If the
 		queue is full then the program has to wait. This is most similar to vertical
 		sync as found in modern games. The moment that the display is refreshed
-		is known as ìvertical blankî.
-		ï VK_PRESENT_MODE_FIFO_RELAXED_KHR: This mode only differs from the
+		is known as ‚Äúvertical blank‚Äù.
+		‚Ä¢ VK_PRESENT_MODE_FIFO_RELAXED_KHR: This mode only differs from the
 		previous one if the application is late and the queue was empty at the last
 		vertical blank. Instead of waiting for the next vertical blank, the image is
 		transferred right away when it finally arrives. This may result in visible
 		tearing.
-		ï VK_PRESENT_MODE_MAILBOX_KHR: This is another variation of the second
+		‚Ä¢ VK_PRESENT_MODE_MAILBOX_KHR: This is another variation of the second
 		mode. Instead of blocking the application when the queue is full, the
 		images that are already queued are simply replaced with the newer ones.
 		This mode can be used to render frames as fast as possible while still
 		avoiding tearing, resulting in fewer latency issues than standard vertical
-		sync. This is commonly known as ìtriple bufferingî, although the existence
+		sync. This is commonly known as ‚Äútriple buffering‚Äù, although the existence
 		of three buffers alone does not necessarily mean that the framerate
 		is unlocked.
 		*/
@@ -1101,16 +1180,16 @@ private:
 	}
 
 	/*
-	The swap extent is the resolution of the swap chain images and itís almost always
-	exactly equal to the resolution of the window that weíre drawing to in pixels
+	The swap extent is the resolution of the swap chain images and it‚Äôs almost always
+	exactly equal to the resolution of the window that we‚Äôre drawing to in pixels
 	GLFW uses two units when measuring sizes: pixels and screen coordinates. For
 	example, the resolution {WIDTH, HEIGHT} that we specified earlier when creating
 	the window is measured in screen coordinates. But Vulkan works with
 	pixels, so the swap chain extent must be specified in pixels as well. Unfortunately,
-	if you are using a high DPI display (like Appleís Retina display), screen
-	coordinates donít correspond to pixels. Instead, due to the higher pixel density,
+	if you are using a high DPI display (like Apple‚Äôs Retina display), screen
+	coordinates don‚Äôt correspond to pixels. Instead, due to the higher pixel density,
 	the resolution of the window in pixel will be larger than the resolution in screen
-	coordinates. So if Vulkan doesnít fix the swap extent for us, we canít just use
+	coordinates. So if Vulkan doesn‚Äôt fix the swap extent for us, we can‚Äôt just use
 	the original {WIDTH, HEIGHT}. Instead, we must use glfwGetFramebufferSize
 	to query the resolution of the window in pixel before matching it against the
 	minimum and maximum image extent.
@@ -1149,47 +1228,55 @@ private:
 		swapChainImageViews.resize(swapChainImages.size());
 		for (size_t i{ 0 }; i < swapChainImages.size(); i++)
 		{
-			VkImageViewCreateInfo createInfo{};
-			createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-			createInfo.image = swapChainImages[i];
-			/*
-			The viewType and format fields specify how the image data should be interpreted.
-			The viewType parameter allows you to treat images as 1D textures, 2D
-			textures, 3D textures and cube maps.
-			*/
-			createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-			createInfo.format = swapChainImageFormat;
-			/*
-			The components field allows you to swizzle the color channels around. For
-			example, you can map all of the channels to the red channel for a monochrome
-			texture. You can also map constant values of 0 and 1 to a channel. In our case
-			weíll stick to the default mapping.
-			*/
-			createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-			/*
-			The subresourceRange field describes what the imageís purpose is and which
-			part of the image should be accessed. Our images will be used as color targets
-			without any mipmapping levels or multiple layers.
-			*/
-			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-			createInfo.subresourceRange.baseMipLevel = 0;
-			createInfo.subresourceRange.levelCount = 1;
-			createInfo.subresourceRange.baseArrayLayer = 0;
-			createInfo.subresourceRange.layerCount = 1;
+			swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat);
 			/*
 			If you were working on a stereographic 3D application, then you would create
 			a swap chain with multiple layers. You could then create multiple image views
 			for each image representing the views for the left and right eyes by accessing
 			different layers.
 			*/
-			if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS)
-			{
-				throw std::runtime_error("failed to create image views!");
-			}
 		}
+	}
+
+	VkImageView createImageView(VkImage image, VkFormat format)
+	{
+		VkImageViewCreateInfo viewInfo{};
+		viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		viewInfo.image = image;
+		/*
+		The viewType and format fields specify how the image data should be interpreted.
+		The viewType parameter allows you to treat images as 1D textures, 2D
+		textures, 3D textures and cube maps.
+		*/
+		viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		viewInfo.format = format;
+		/*
+		The components field allows you to swizzle the color channels around. For
+		example, you can map all of the channels to the red channel for a monochrome
+		texture. You can also map constant values of 0 and 1 to a channel. In our case
+		we‚Äôll stick to the default mapping.
+		*/
+		viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+		viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+		viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+		viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+		/*
+		The subresourceRange field describes what the image‚Äôs purpose is and which
+		part of the image should be accessed. Our images will be used as color targets
+		without any mipmapping levels or multiple layers.
+		*/
+		viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		viewInfo.subresourceRange.baseMipLevel = 0;
+		viewInfo.subresourceRange.levelCount = 1;
+		viewInfo.subresourceRange.baseArrayLayer = 0;
+		viewInfo.subresourceRange.layerCount = 1;
+
+		VkImageView imageView;
+		if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create image view!");
+		}
+		return imageView;
 	}
 
 	void createRenderPass()
@@ -1200,15 +1287,15 @@ private:
 		/*
 		The loadOp and storeOp determine what to do with the data in the attachment
 		before rendering and after rendering. We have the following choices for loadOp:
-		ï VK_ATTACHMENT_LOAD_OP_LOAD: Preserve the existing contents of the attachment
-		ï VK_ATTACHMENT_LOAD_OP_CLEAR: Clear the values to a constant at the
+		‚Ä¢ VK_ATTACHMENT_LOAD_OP_LOAD: Preserve the existing contents of the attachment
+		‚Ä¢ VK_ATTACHMENT_LOAD_OP_CLEAR: Clear the values to a constant at the
 		start
-		ï VK_ATTACHMENT_LOAD_OP_DONT_CARE: Existing contents are undefined;
-		we donít care about them
+		‚Ä¢ VK_ATTACHMENT_LOAD_OP_DONT_CARE: Existing contents are undefined;
+		we don‚Äôt care about them
 		storeOp:
-		ï VK_ATTACHMENT_STORE_OP_STORE: Rendered contents will be stored in
+		‚Ä¢ VK_ATTACHMENT_STORE_OP_STORE: Rendered contents will be stored in
 		memory and can be read later
-		ï VK_ATTACHMENT_STORE_OP_DONT_CARE: Contents of the framebuffer will
+		‚Ä¢ VK_ATTACHMENT_STORE_OP_DONT_CARE: Contents of the framebuffer will
 		be undefined after the rendering operation
 		*/
 		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -1222,12 +1309,12 @@ private:
 		/*
 		Textures and framebuffers in Vulkan are represented by VkImage objects with
 		a certain pixel format, however the layout of the pixels in memory can change
-		based on what youíre trying to do with an image.
+		based on what you‚Äôre trying to do with an image.
 		Some of the most common layouts are:
-		ï VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: Images used as color attachment
-		ï VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: Images to be presented in the swap
+		‚Ä¢ VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: Images used as color attachment
+		‚Ä¢ VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: Images to be presented in the swap
 		chain
-		ï VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: Images to be used as destination
+		‚Ä¢ VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: Images to be used as destination
 		for a memory copy operation
 		*/
 		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1237,9 +1324,9 @@ private:
 		The initialLayout specifies which layout the image will have before the render
 		pass begins. The finalLayout specifies the layout to automatically transition
 		to when the render pass finishes. Using VK_IMAGE_LAYOUT_UNDEFINED for
-		initialLayout means that we donít care what previous layout the image was
+		initialLayout means that we don‚Äôt care what previous layout the image was
 		in. The caveat of this special value is that the contents of the image are not
-		guaranteed to be preserved, but that doesnít matter since weíre going to clear it
+		guaranteed to be preserved, but that doesn‚Äôt matter since we‚Äôre going to clear it
 		anyway. We want the image to be ready for presentation using the swap chain
 		after rendering, which is why we use VK_IMAGE_LAYOUT_PRESENT_SRC_KHR as
 		finalLayout.
@@ -1271,10 +1358,10 @@ private:
 		The index of the attachment in this array is directly referenced from the fragment
 		shader with the layout(location = 0)out vec4 outColor directive!
 		The following other types of attachments can be referenced by a subpass:
-		ï pInputAttachments: Attachments that are read from a shader
-		ï pResolveAttachments: Attachments used for multisampling color attachments
-		ï pDepthStencilAttachment: Attachment for depth and stencil data
-		ï pPreserveAttachments: Attachments that are not used by this subpass,
+		‚Ä¢ pInputAttachments: Attachments that are read from a shader
+		‚Ä¢ pResolveAttachments: Attachments used for multisampling color attachments
+		‚Ä¢ pDepthStencilAttachment: Attachment for depth and stencil data
+		‚Ä¢ pPreserveAttachments: Attachments that are not used by this subpass,
 		but for which the data must be preserved
 		*/
 		subpass.colorAttachmentCount = 1;
@@ -1302,7 +1389,7 @@ private:
 		/*
 		The operations that should wait on this are in the color attachment stage and
 		involve the writing of the color attachment. These settings will prevent the
-		transition from happening until itís actually necessary (and allowed): when we
+		transition from happening until it‚Äôs actually necessary (and allowed): when we
 		want to start writing colors to it.
 		*/
 		dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1332,7 +1419,7 @@ private:
 		to represent an array of uniform buffer objects, and descriptorCount specifies
 		the number of values in the array. This could be used to specify a transformation
 		for each of the bones in a skeleton for skeletal animation, for example.
-		Our MVP transformation is in a single uniform buffer object, so weíre using a
+		Our MVP transformation is in a single uniform buffer object, so we‚Äôre using a
 		descriptorCount of 1.
 		*/
 		uboLayoutBinding.binding = 0;
@@ -1341,17 +1428,33 @@ private:
 		/*
 		We also need to specify in which shader stages the descriptor is going to be referenced.
 		The stageFlags field can be a combination of VkShaderStageFlagBits
-		values or the value VK_SHADER_STAGE_ALL_GRAPHICS. In our case, weíre only
+		values or the value VK_SHADER_STAGE_ALL_GRAPHICS. In our case, we‚Äôre only
 		referencing the descriptor from the vertex shader.
 		*/
 		uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 		//The pImmutableSamplers field is only relevant for image sampling related descriptors
 		uboLayoutBinding.pImmutableSamplers = nullptr;
 
+		VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+		samplerLayoutBinding.binding = 1;
+		samplerLayoutBinding.descriptorCount = 1;
+		samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		samplerLayoutBinding.pImmutableSamplers = nullptr;
+		/*
+		Make sure to set the stageFlags to indicate that we intend to use the combined
+		image sampler descriptor in the fragment shader. That‚Äôs where the color of the
+		fragment is going to be determined. It is possible to use texture sampling in
+		the vertex shader, for example to dynamically deform a grid of vertices by a
+		heightmap.
+		*/
+		samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+		std::array< VkDescriptorSetLayoutBinding, 2> bindings{ uboLayoutBinding, samplerLayoutBinding };
+
 		VkDescriptorSetLayoutCreateInfo layoutInfo{};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-		layoutInfo.bindingCount = 1;
-		layoutInfo.pBindings = &uboLayoutBinding;
+		layoutInfo.bindingCount = bindings.size();
+		layoutInfo.pBindings = bindings.data();
 
 		if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
 		{
@@ -1413,9 +1516,9 @@ private:
 
 		/*
 		The compilation and linking of the SPIR-V bytecode to machine code for execution by the GPU
-		doesnít happen until the graphics pipeline is created. That means that weíre allowed
+		doesn‚Äôt happen until the graphics pipeline is created. That means that we‚Äôre allowed
 		to destroy the shader modules again as soon as pipeline creation is finished,
-		which is why weíll make them local variables in the createGraphicsPipeline
+		which is why we‚Äôll make them local variables in the createGraphicsPipeline
 		function instead of class members:
 		*/
 		VkShaderModule vertShaderModule{ createShaderModule(vertShaderCode) };
@@ -1449,19 +1552,19 @@ private:
 		what kind of geometry will be drawn from the vertices and if primitive restart
 		should be enabled. The former is specified in the topology member and can
 		have values like:
-		ï VK_PRIMITIVE_TOPOLOGY_POINT_LIST: points from vertices
-		ï VK_PRIMITIVE_TOPOLOGY_LINE_LIST: line from every 2 vertices without
+		‚Ä¢ VK_PRIMITIVE_TOPOLOGY_POINT_LIST: points from vertices
+		‚Ä¢ VK_PRIMITIVE_TOPOLOGY_LINE_LIST: line from every 2 vertices without
 		reuse
-		ï VK_PRIMITIVE_TOPOLOGY_LINE_STRIP: the end vertex of every line is used
+		‚Ä¢ VK_PRIMITIVE_TOPOLOGY_LINE_STRIP: the end vertex of every line is used
 		as start vertex for the next line
-		ï VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST: triangle from every 3 vertices
+		‚Ä¢ VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST: triangle from every 3 vertices
 		without reuse
-		ï VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP: the second and third vertex
+		‚Ä¢ VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP: the second and third vertex
 		of every triangle are used as first two vertices of the next triangle
 		Normally, the vertices are loaded from the vertex buffer by index in sequential
 		order, but with an element buffer you can specify the indices to use yourself.
 		This allows you to perform optimizations like reusing vertices. If you set the
-		primitiveRestartEnable member to VK_TRUE, then itís possible to break up
+		primitiveRestartEnable member to VK_TRUE, then it‚Äôs possible to break up
 		lines and triangles in the _STRIP topology modes by using a special index of
 		0xFFFF or 0xFFFFFFFF.
 		*/
@@ -1517,9 +1620,9 @@ private:
 		/*
 		The polygonMode determines how fragments are generated for geometry. The
 		following modes are available:
-		ï VK_POLYGON_MODE_FILL: fill the area of the polygon with fragments
-		ï VK_POLYGON_MODE_LINE: polygon edges are drawn as lines
-		ï VK_POLYGON_MODE_POINT: polygon vertices are drawn as points
+		‚Ä¢ VK_POLYGON_MODE_FILL: fill the area of the polygon with fragments
+		‚Ä¢ VK_POLYGON_MODE_LINE: polygon edges are drawn as lines
+		‚Ä¢ VK_POLYGON_MODE_POINT: polygon vertices are drawn as points
 		Using any mode other than fill requires enabling a GPU feature.
 		*/
 		rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
@@ -1554,7 +1657,7 @@ private:
 		which is one of the ways to perform anti-aliasing. It works by combining
 		the fragment shader results of multiple polygons that rasterize to the same
 		pixel. This mainly occurs along edges, which is also where the most noticeable
-		aliasing artifacts occur. Because it doesnít need to run the fragment shader
+		aliasing artifacts occur. Because it doesn‚Äôt need to run the fragment shader
 		multiple times if only one polygon maps to a pixel, it is significantly less
 		expensive than simply rendering to a higher resolution and then downscaling.
 		Enabling it requires enabling a GPU feature.
@@ -1573,8 +1676,8 @@ private:
 		After a fragment shader has returned a color, it needs to be combined with the
 		color that is already in the framebuffer. This transformation is known as color
 		blending and there are two ways to do it:
-		ï Mix the old and new value to produce a final color
-		ï Combine the old and new value using a bitwise operation
+		‚Ä¢ Mix the old and new value to produce a final color
+		‚Ä¢ Combine the old and new value using a bitwise operation
 		There are two types of structs to configure color blending. The first struct,
 		VkPipelineColorBlendAttachmentState contains the configuration per attached
 		framebuffer and the second struct, VkPipelineColorBlendStateCreateInfo
@@ -1639,16 +1742,16 @@ private:
 
 		/*
 		We can now combine all of the structures and objects from the previous chapters
-		to create the graphics pipeline! Hereís the types of objects we have now, as a
+		to create the graphics pipeline! Here‚Äôs the types of objects we have now, as a
 		quick recap:
-		ï Shader stages: the shader modules that define the functionality of the
+		‚Ä¢ Shader stages: the shader modules that define the functionality of the
 		programmable stages of the graphics pipeline
-		ï Fixed-function state: all of the structures that define the fixed-function
+		‚Ä¢ Fixed-function state: all of the structures that define the fixed-function
 		stages of the pipeline, like input assembly, rasterizer, viewport and color
 		blending
-		ï Pipeline layout: the uniform and push values referenced by the shader
+		‚Ä¢ Pipeline layout: the uniform and push values referenced by the shader
 		that can be updated at draw time
-		ï Render pass: the attachments referenced by the pipeline stages and their
+		‚Ä¢ Render pass: the attachments referenced by the pipeline stages and their
 		usage
 		*/
 
@@ -1675,7 +1778,7 @@ private:
 		same parent can also be done quicker. You can either specify the handle of an
 		existing pipeline with basePipelineHandle or reference another pipeline that
 		is about to be created by index with basePipelineIndex. Right now there is
-		only a single pipeline, so weíll simply specify a null handle and an invalid index.
+		only a single pipeline, so we‚Äôll simply specify a null handle and an invalid index.
 		These values are only used if the VK_PIPELINE_CREATE_DERIVATIVE_BIT flag
 		is also specified in the flags field of VkGraphicsPipelineCreateInfo.
 		*/
@@ -1744,10 +1847,10 @@ private:
 		poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 		/*
 		There are two possible flags for command pools:
-		ï VK_COMMAND_POOL_CREATE_TRANSIENT_BIT: Hint that command buffers
+		‚Ä¢ VK_COMMAND_POOL_CREATE_TRANSIENT_BIT: Hint that command buffers
 		are rerecorded with new commands very often (may change memory allocation
 		behavior)
-		ï VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT: Allow command
+		‚Ä¢ VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT: Allow command
 		buffers to be rerecorded individually, without this flag they all have
 		to be reset together
 		We will be recording a command buffer every frame, so we want to be able to reset
@@ -1756,12 +1859,395 @@ private:
 		Command buffers are executed
 		*/
 		poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-		// Weíre going to record commands for drawing, which is why weíve chosen the graphics queue family.
+		// We‚Äôre going to record commands for drawing, which is why we‚Äôve chosen the graphics queue family.
 		poolInfo.queueFamilyIndex = queueFamilyIndices.grahicsFamily.value();
 
 		if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS)
 		{
 			throw std::runtime_error("failed to create command pool!");
+		}
+	}
+
+	void createTextureImage()
+	{
+		int texWidth;
+		int texHeight;
+		int texChannels;
+		stbi_uc* pixels{ stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha) };
+		/*
+		The pointer that is
+		returned is the first element in an array of pixel values. The pixels are laid out
+		row by row with 4 bytes per pixel in the case of STBI_rgb_alpha for a total of
+		texWidth * texHeight * 4 values.
+		*/
+		VkDeviceSize imageSize{ texWidth * texHeight * static_cast <VkDeviceSize>(4) };
+		if (!pixels)
+		{
+			throw std::runtime_error("failed to load texture image!");
+		}
+
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			stagingBuffer, stagingBufferMemory);
+		void* data;
+		vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
+		memcpy(data, pixels, imageSize);
+		vkUnmapMemory(device, stagingBufferMemory);
+		stbi_image_free(pixels);
+
+		createImage(texWidth, texHeight, VK_FORMAT_R8G8B8A8_SRGB,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+			VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
+
+		/*
+		The next step is to copy the staging
+		buffer to the texture image. This involves two steps:
+		‚Ä¢ Transition the texture image to VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+		‚Ä¢ Execute the buffer to image copy operation
+		*/
+		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight);
+		/*
+		To be able to start sampling from the texture image in the shader, we need one
+		last transition to prepare it for shader access
+		*/
+		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+		vkDestroyBuffer(device, stagingBuffer, nullptr);
+		vkFreeMemory(device, stagingBufferMemory, nullptr);
+	}
+
+	void createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling,
+		VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image,
+		VkDeviceMemory& imageMemory)
+	{
+		VkImageCreateInfo imageInfo{};
+		imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		/*
+		The image type, specified in the imageType field, tells Vulkan with what kind
+		of coordinate system the texels in the image are going to be addressed. It is
+		possible to create 1D, 2D and 3D images. One dimensional images can be used
+		to store an array of data or gradient, two dimensional images are mainly used
+		for textures, and three dimensional images can be used to store voxel volumes,
+		for example. The extent field specifies the dimensions of the image, basically
+		how many texels there are on each axis. That‚Äôs why depth must be 1 instead
+		of 0. Our texture will not be an array and we won‚Äôt be using mipmapping for
+		now.
+		*/
+		imageInfo.imageType = VK_IMAGE_TYPE_2D;
+		imageInfo.extent.width = width;
+		imageInfo.extent.height = height;
+		imageInfo.extent.depth = 1;
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = 1;
+		imageInfo.format = format;
+		/*
+		The tiling field can have one of two values:
+		‚Ä¢ VK_IMAGE_TILING_LINEAR: Texels are laid out in row-major order like our
+		pixels array
+		‚Ä¢ VK_IMAGE_TILING_OPTIMAL: Texels are laid out in an implementation defined
+		order for optimal access
+		Unlike the layout of an image, the tiling mode cannot be changed at a later
+		time. If you want to be able to directly access texels in the memory of the
+		image, then you must use VK_IMAGE_TILING_LINEAR. We will be using a staging
+		buffer instead of a staging image, so this won‚Äôt be necessary. We will be using
+		VK_IMAGE_TILING_OPTIMAL for efficient access from the shader.
+		*/
+		imageInfo.tiling = tiling;
+		/*
+		There are only two possible values for the initialLayout of an image:
+		‚Ä¢ VK_IMAGE_LAYOUT_UNDEFINED: Not usable by the GPU and the very first
+		transition will discard the texels.
+		‚Ä¢ VK_IMAGE_LAYOUT_PREINITIALIZED: Not usable by the GPU, but the first
+		transition will preserve the texels.
+		191
+		There are few situations where it is necessary for the texels to be preserved
+		during the first transition. One example, however, would be if you wanted to use
+		an image as a staging image in combination with the VK_IMAGE_TILING_LINEAR
+		layout. In that case, you‚Äôd want to upload the texel data to it and then transition
+		the image to be a transfer source without losing the data. In our case, however,
+		we‚Äôre first going to transition the image to be a transfer destination and then
+		copy texel data to it from a buffer object, so we don‚Äôt need this property and
+		can safely use VK_IMAGE_LAYOUT_UNDEFINED.
+		*/
+		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		/*
+		The usage field has the same semantics as the one during buffer creation.
+		The image is going to be used as destination for the buffer copy, so it should
+		be set up as a transfer destination. We also want to be able to access
+		the image from the shader to color our mesh, so the usage should include
+		VK_IMAGE_USAGE_SAMPLED_BIT.
+		*/
+		imageInfo.usage = usage;
+		/*
+		The image will only be used by one queue family: the one that supports graphics
+		(and therefore also) transfer operations.
+		*/
+		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		/*
+		The samples flag is related to multisampling. This is only relevant for images
+		that will be used as attachments, so stick to one sample. There are some optional
+		flags for images that are related to sparse images. Sparse images are images
+		where only certain regions are actually backed by memory. If you were using
+		a 3D texture for a voxel terrain, for example, then you could use this to avoid
+		allocating memory to store large volumes of ‚Äúair‚Äù values. We won‚Äôt be using it
+		in this tutorial, so leave it to its default value of 0.
+		*/
+		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageInfo.flags = 0;
+
+		if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create iamge!");
+		}
+
+		VkMemoryRequirements memRequirements;
+		vkGetImageMemoryRequirements(device, image, &memRequirements);
+		VkMemoryAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+		if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to allocate image memory!");
+		}
+
+		vkBindImageMemory(device, image, imageMemory, 0);
+	}
+
+	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout)
+	{
+		VkCommandBuffer commandBuffer{ beginSingleTimeCommands() };
+		/*
+		One of the most common ways to perform layout transitions is using an image
+		memory barrier. A pipeline barrier like that is generally used to synchronize
+		access to resources, like ensuring that a write to a buffer completes before reading
+		from it, but it can also be used to transition image layouts and transfer
+		queue family ownership when VK_SHARING_MODE_EXCLUSIVE is used. There is
+		an equivalent buffer memory barrier to do this for buffers.
+		*/
+		VkImageMemoryBarrier barrier{};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		/*
+		The first two fields specify layout transition. It is possible to use
+		VK_IMAGE_LAYOUT_UNDEFINED as oldLayout if you don‚Äôt care about the
+		existing contents of the image.
+		*/
+		barrier.oldLayout = oldLayout;
+		barrier.newLayout = newLayout;
+		/*
+		If you are using the barrier to transfer queue family ownership, then these
+		two fields should be the indices of the queue families. They must be set to
+		VK_QUEUE_FAMILY_IGNORED if you don‚Äôt want to do this (not the default value!).
+		*/
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = image;
+		/*
+		The image and subresourceRange specify the image that is affected and the
+		specific part of the image. Our image is not an array and does not have mipmapping
+		levels, so only one level and layer are specified.
+		*/
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+		/*
+		We still need to set access masks and pipeline stages based on the
+		layouts in the transition.
+		There are two transitions we need to handle:
+		‚Ä¢ Undefined ‚Üí transfer destination: transfer writes that don‚Äôt need to wait
+		on anything
+		‚Ä¢ Transfer destination ‚Üí shader reading: shader reads should wait on transfer
+		writes, specifically the shader reads in the fragment shader, because
+		that‚Äôs where we‚Äôre going to use the texture
+		These rules are specified using the following access masks and pipeline stages:
+		*/
+		VkPipelineStageFlags sourceStage;
+		VkPipelineStageFlags destinationStage;
+
+		if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+		{
+			barrier.srcAccessMask = 0;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+			destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+		}
+		else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+		{
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+			sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+			destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		}
+		else
+		{
+			throw std::invalid_argument("unsupported layout transistion!");
+		}
+
+		/*
+		All types of pipeline barriers are submitted using the same function. The first parameter
+		after the command buffer specifies in which pipeline stage the operations
+		occur that should happen before the barrier. The second parameter specifies the
+		pipeline stage in which operations will wait on the barrier. The pipeline stages
+		that you are allowed to specify before and after the barrier depend on how you
+		use the resource before and after the barrier. The allowed values are listed in this
+		table of the specification 
+		(https://docs.vulkan.org/spec/latest/chapters/synchronization.html#synchronization-access-types-supported). 
+		For example, if you‚Äôre going to read from a uniform
+		after the barrier, you would specify a usage of VK_ACCESS_UNIFORM_READ_BIT
+		and the earliest shader that will read from the uniform as pipeline stage, for
+		example VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT. It would not make sense
+		to specify a non-shader pipeline stage for this type of usage and the validation
+		layers will warn you when you specify a pipeline stage that does not match the
+		type of usage.
+		The third parameter is either 0 or VK_DEPENDENCY_BY_REGION_BIT. The latter
+		turns the barrier into a per-region condition. That means that the implementation
+		is allowed to already begin reading from the parts of a resource that were
+		written so far, for example.
+		The last three pairs of parameters reference arrays of pipeline barriers of the
+		three available types: memory barriers, buffer memory barriers, and image
+		memory barriers like the one we‚Äôre using here. Note that we‚Äôre not using the
+		VkFormat parameter yet, but we‚Äôll be using that one for special transitions in
+		the depth buffer chapter.
+		*/
+		vkCmdPipelineBarrier(
+			commandBuffer,
+			sourceStage, destinationStage,
+			0,
+			0, nullptr,
+			0, nullptr,
+			1, &barrier
+		);
+
+		endSingleTimeCommands(commandBuffer);
+	}
+
+	void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height)
+	{
+		VkCommandBuffer commandBuffer{ beginSingleTimeCommands() };
+
+		VkBufferImageCopy region{};
+		/*
+		The bufferOffset specifies the byte
+		offset in the buffer at which the pixel values start. The bufferRowLength and
+		bufferImageHeight fields specify how the pixels are laid out in memory. For
+		example, you could have some padding bytes between rows of the image. Specifying
+		0 for both indicates that the pixels are simply tightly packed like they
+		are in our case. The imageSubresource, imageOffset and imageExtent fields
+		indicate to which part of the image we want to copy the pixels.
+		*/
+		region.bufferOffset = 0;
+		region.bufferRowLength = 0;
+		region.bufferImageHeight = 0;
+		region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		region.imageSubresource.mipLevel = 0;
+		region.imageSubresource.baseArrayLayer = 0;
+		region.imageSubresource.layerCount = 1;
+		region.imageOffset = { 0, 0, 0 };
+		region.imageExtent = {
+			width,
+			height,
+			1
+		};
+
+		vkCmdCopyBufferToImage(
+			commandBuffer,
+			buffer,
+			image,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			1,
+			&region
+		);
+
+		endSingleTimeCommands(commandBuffer);
+	}
+
+	void createTextureImageView()
+	{
+		textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB);
+	}
+
+	void createTextureSampler()
+	{
+		VkSamplerCreateInfo samplerInfo{};
+		samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		/*
+		The magFilter and minFilter fields specify how to interpolate texels that
+		are magnified or minified. Magnification concerns the oversampling
+		and minification concerns undersampling. The choices are
+		VK_FILTER_NEAREST and VK_FILTER_LINEAR,
+		*/
+		samplerInfo.magFilter = VK_FILTER_LINEAR;
+		samplerInfo.minFilter = VK_FILTER_LINEAR;
+		/*
+		The addressing mode can be specified per axis using the addressMode fields.
+		The available values are listed below.
+		Note that the axes are called U, V and W instead of X, Y and Z.
+		This is a convention for texture space coordinates.
+		‚Ä¢ VK_SAMPLER_ADDRESS_MODE_REPEAT: Repeat the texture when going beyond
+		the image dimensions.
+		‚Ä¢ VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT: Like repeat, but inverts
+		the coordinates to mirror the image when going beyond the dimensions.
+		‚Ä¢ VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE: Take the color of the edge
+		closest to the coordinate beyond the image dimensions.
+		‚Ä¢ VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE: Like clamp to edge,
+		but instead uses the edge opposite to the closest edge.
+		‚Ä¢ VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER: Return
+		*/
+		samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		/*
+		These two fields specify if anisotropic filtering should be used. There is no reason
+		not to use this unless performance is a concern. The maxAnisotropy field limits
+		the amount of texel samples that can be used to calculate the final color. A
+		lower value results in better performance, but lower quality results. To figure
+		out which value we can use, we need to retrieve the properties of the physical
+		device
+		*/
+		samplerInfo.anisotropyEnable = VK_TRUE;
+
+		VkPhysicalDeviceProperties properties{};
+		vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+		samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+		/*
+		The borderColor field specifies which color is returned when sampling beyond
+		the image with clamp to border addressing mode. It is possible to return black,
+		white or transparent in either float or int formats. You cannot specify an arbitrary
+		color.
+		*/
+		samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+		/*
+		The unnormalizedCoordinates field specifies which coordinate system you
+		want to use to address texels in an image. If this field is VK_TRUE, then you
+		can simply use coordinates within the [0, texWidth) and [0, texHeight)
+		range. If it is VK_FALSE, then the texels are addressed using the [0, 1) range
+		on all axes. Real-world applications almost always use normalized coordinates,
+		because then it‚Äôs possible to use textures of varying resolutions with the exact
+		same coordinates.
+		*/
+		samplerInfo.unnormalizedCoordinates = VK_FALSE;
+		samplerInfo.compareEnable = VK_FALSE;
+		/*
+		If a comparison function is enabled, then texels will first be compared to a value,
+		and the result of that comparison is used in filtering operations. This is mainly
+		used for percentage-closer filtering on shadow maps
+		*/
+		samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerInfo.mipLodBias = 0.0f;
+		samplerInfo.minLod = 0.0f;
+		samplerInfo.maxLod = 0.0f;
+
+		if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create texture sampler!");
 		}
 	}
 
@@ -1784,7 +2270,7 @@ private:
 		by an offset and size. The offset and size here are 0 and bufferInfo.size,
 		respectively. It is also possible to specify the special value VK_WHOLE_SIZE to
 		map all of the memory. The second to last parameter can be used to specify
-		flags, but there arenít any available yet in the current API. It must be set to the
+		flags, but there aren‚Äôt any available yet in the current API. It must be set to the
 		value 0. The last parameter specifies the output for the pointer to the mapped
 		memory.
 		*/
@@ -1796,8 +2282,8 @@ private:
 		copy the data into the buffer memory, for example because of caching. It is also
 		possible that writes to the buffer are not visible in the mapped memory yet.
 		There are two ways to deal with that problem:
-		ï Use a memory heap that is host coherent, indicated with VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-		ï Call vkFlushMappedMemoryRanges after writing to the mapped memory,
+		‚Ä¢ Use a memory heap that is host coherent, indicated with VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+		‚Ä¢ Call vkFlushMappedMemoryRanges after writing to the mapped memory,
 		and call vkInvalidateMappedMemoryRanges before reading from the
 		mapped memory
 		We went for the first approach, which ensures that the mapped memory always
@@ -1809,7 +2295,7 @@ private:
 
 		/*
 		Flushing memory ranges or using a coherent memory heap means that the driver
-		will be aware of our writes to the buffer, but it doesnít mean that they are
+		will be aware of our writes to the buffer, but it doesn‚Äôt mean that they are
 		actually visible on the GPU yet. The transfer of data to the GPU is an operation
 		that happens in the background and the specification simply tells us that it is
 		guaranteed to be complete as of the next call to vkQueueSubmit.
@@ -1819,7 +2305,7 @@ private:
 		VK_BUFFER_USAGE_TRANSFER_DST_BIT: Buffer can be used as destination
 		in a memory transfer operation.
 		The vertexBuffer is now allocated from a memory type that is device local,
-		which generally means that weíre not able to use vkMapMemory.
+		which generally means that we‚Äôre not able to use vkMapMemory.
 		*/
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1830,10 +2316,10 @@ private:
 		allows us to access it from the CPU may not be the most optimal memory type
 		for the graphics card itself to read from. The most optimal memory has the
 		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag and is usually not accessible by
-		the CPU on dedicated graphics cards. Weíve created two vertex buffers.
+		the CPU on dedicated graphics cards. We‚Äôve created two vertex buffers.
 		One staging buffer in CPU accessible memory to upload the
 		data from the vertex array to, and the final vertex buffer in device local memory.
-		Weíll then use a buffer copy command to move the data from the staging buffer
+		We‚Äôll then use a buffer copy command to move the data from the staging buffer
 		to the actual vertex buffer.
 		*/
 		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
@@ -1867,15 +2353,15 @@ private:
 		}
 
 		/*
-		The buffer has been created, but it doesnít actually have any memory assigned to
+		The buffer has been created, but it doesn‚Äôt actually have any memory assigned to
 		it yet. The first step of allocating memory for the buffer is to query its memory
 		requirements.
 		The VkMemoryRequirements struct has three fields:
-		ï size: The size of the required amount of memory in bytes, may differ
+		‚Ä¢ size: The size of the required amount of memory in bytes, may differ
 		from bufferInfo.size.
-		ï alignment: The offset in bytes where the buffer begins in the allocated region
+		‚Ä¢ alignment: The offset in bytes where the buffer begins in the allocated region
 		of memory, depends on bufferInfo.usage and bufferInfo.flags.
-		ï memoryTypeBits: Bit field of the memory types that are suitable for the
+		‚Ä¢ memoryTypeBits: Bit field of the memory types that are suitable for the
 		buffer.
 		Graphics cards
 		*/
@@ -1883,18 +2369,18 @@ private:
 		vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
 
 		/*
-		In a real world application, youíre not supposed
+		In a real world application, you‚Äôre not supposed
 		to actually call vkAllocateMemory for every individual buffer. The
 		maximum number of simultaneous memory allocations is limited by the
 		maxMemoryAllocationCount physical device limit, which may be as low as
 		4096 even on high end hardware like an NVIDIA GTX 1080. The right way to
 		allocate memory for a large number of objects at the same time is to create a
 		custom allocator that splits up a single allocation among many different objects
-		by using the offset parameters that weíve seen in many functions.
+		by using the offset parameters that we‚Äôve seen in many functions.
 		You can either implement such an allocator yourself, or use the VulkanMemoryAllocator
 		library provided by the GPUOpen initiative. However, for this
-		tutorial itís okay to use a separate allocation for every resource, because we
-		wonít come close to hitting any of these limits for now.
+		tutorial it‚Äôs okay to use a separate allocation for every resource, because we
+		won‚Äôt come close to hitting any of these limits for now.
 		*/
 		VkMemoryAllocateInfo allocInfo{};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -1918,7 +2404,7 @@ private:
 		The VkPhysicalDeviceMemoryProperties structure has two arrays
 		memoryTypes and memoryHeaps. Memory heaps are distinct memory resources
 		like dedicated VRAM and swap space in RAM for when VRAM runs
-		out. The different types of memory exist within these heaps. Right now weíll
+		out. The different types of memory exist within these heaps. Right now we‚Äôll
 		only concern ourselves with the type of memory and not the heap it comes
 		from, but you can imagine that this can affect performance.
 		*/
@@ -1929,7 +2415,7 @@ private:
 			that are suitable. That means that we can find the index of a suitable memory
 			type by simply iterating over them and checking if the corresponding bit is set
 			to 1.
-			However, weíre not just interested in a memory type that is suitable for the
+			However, we‚Äôre not just interested in a memory type that is suitable for the
 			vertex buffer. We also need to be able to write our vertex data to that memory.
 			The memoryTypes array consists of VkMemoryType structs that specify the heap
 			and properties of each type of memory. The properties define special features
@@ -1948,6 +2434,18 @@ private:
 
 	void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
 	{
+		VkCommandBuffer commandBuffer{ beginSingleTimeCommands() };
+
+		VkBufferCopy copyRegion{};
+		copyRegion.srcOffset = 0;
+		copyRegion.dstOffset = 0;
+		copyRegion.size = size;
+		vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+		endSingleTimeCommands(commandBuffer);
+	}
+
+	VkCommandBuffer beginSingleTimeCommands()
+	{
 		VkCommandBufferAllocateInfo allocInfo{};
 		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -1960,20 +2458,19 @@ private:
 		VkCommandBufferBeginInfo beginInfo{};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		/*
-		Weíre only going to use the command buffer once and wait with returning
+		We‚Äôre only going to use the command buffer once and wait with returning
 		from the function until the copy operation has finished executing.
-		Itís good practice to tell the driver about our intent using
+		It‚Äôs good practice to tell the driver about our intent using
 		VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT.
 		*/
 		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
 		vkBeginCommandBuffer(commandBuffer, &beginInfo);
+		return commandBuffer;
+	}
 
-		VkBufferCopy copyRegion{};
-		copyRegion.srcOffset = 0;
-		copyRegion.dstOffset = 0;
-		copyRegion.size = size;
-		vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+	void endSingleTimeCommands(VkCommandBuffer commandBuffer)
+	{
 		vkEndCommandBuffer(commandBuffer);
 		VkSubmitInfo submitInfo{};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -2043,8 +2540,8 @@ private:
 			/*
 			We map the buffer right after creation using vkMapMemory to get a pointer
 			to which we can write the data later on. The buffer stays mapped to this
-			pointer for the applicationís whole lifetime. This technique is called ìpersistent
-			mappingî and works on all Vulkan implementations. Not having to map the
+			pointer for the application‚Äôs whole lifetime. This technique is called ‚Äúpersistent
+			mapping‚Äù and works on all Vulkan implementations. Not having to map the
 			buffer every time we need to update it increases performances, as mapping is
 			not free.
 			*/
@@ -2054,14 +2551,16 @@ private:
 
 	void createDescriptorPool()
 	{
-		VkDescriptorPoolSize poolSize{};
-		poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSize.descriptorCount = MAX_FRAMES_IN_FLIGHT;
+		std::array< VkDescriptorPoolSize, 2> poolSizes{};
+		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSizes[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
+		poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		poolSizes[1].descriptorCount = MAX_FRAMES_IN_FLIGHT;
 
 		VkDescriptorPoolCreateInfo poolInfo{};
 		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 		poolInfo.poolSizeCount = 1;
-		poolInfo.pPoolSizes = &poolSize;
+		poolInfo.pPoolSizes = poolSizes.data();
 		/*
 		Aside from the maximum number of individual descriptors that are available,
 		we also need to specify the maximum number of descriptor sets that may be
@@ -2071,7 +2570,7 @@ private:
 		/*
 		The structure has an optional flag similar to command pools that determines if
 		individual descriptor sets can be freed or not: VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT.
-		Weíre not going to touch the descriptor set after creating it, so we donít need
+		We‚Äôre not going to touch the descriptor set after creating it, so we don‚Äôt need
 		this flag. You can leave flags to its default value of 0.
 		*/
 		poolInfo.flags = 0;
@@ -2103,13 +2602,13 @@ private:
 			throw std::runtime_error("failed to create descriptor sets!");
 		}
 		/*
-		You donít need to explicitly clean up descriptor sets, because they will
+		You don‚Äôt need to explicitly clean up descriptor sets, because they will
 		be automatically freed when the descriptor pool is destroyed. The call
 		to vkAllocateDescriptorSets will allocate descriptor sets, each with one
 		uniform buffer descriptor
 		*/
 
-		for (size_t i{ 0 }; i < MAX_FRAMES_IN_FLIGHT; i++)
+		for (size_t i{0}; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
 			/*
 			Descriptors that refer to buffers, like our uniform buffer descriptor, are configured
@@ -2120,44 +2619,51 @@ private:
 			bufferInfo.buffer = uniformBuffers[i];
 			bufferInfo.offset = 0;
 			/*
-			If youíre overwriting the whole buffer, like we are in this case, then it is also
+			If you‚Äôre overwriting the whole buffer, like we are in this case, then it is also
 			possible to use the VK_WHOLE_SIZE value for the range.
 			*/
 			bufferInfo.range = sizeof(UniformBufferObject);
+
+			VkDescriptorImageInfo imageInfo{};
+			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			imageInfo.imageView = textureImageView;
+			imageInfo.sampler = textureSampler;
 
 			/*
 			The configuration of descriptors
 			is updated using the vkUpdateDescriptorSets function, which takes
 			an array of VkWriteDescriptorSet structs as parameter.
 			*/
-			VkWriteDescriptorSet descriptorWrite{};
-			descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+			descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 			/*
 			We gave our uniform buffer binding index 0. Remember that descriptors can be
 			arrays, so we also need to specify the first index in the array that we want to
-			update. Weíre not using an array, so the index is simply 0.
+			update. We‚Äôre not using an array, so the index is simply 0.
 			*/
-			descriptorWrite.dstSet = descriptorSets[i];
-			descriptorWrite.dstBinding = 0;
-			descriptorWrite.dstArrayElement = 0;
-			/*
-			We need to specify the type of descriptor again. Itís possible to update multiple
-			descriptors at once in an array, starting at index dstArrayElement. The
-			descriptorCount field specifies how many array elements you want to update.
-			*/
-			descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			descriptorWrite.descriptorCount = 1;
+			descriptorWrites[0].dstSet = descriptorSets[i];
+			descriptorWrites[0].dstBinding = 0;
+			descriptorWrites[0].dstArrayElement = 0;
+
+			descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrites[0].descriptorCount = 1;
 			/*
 			The last field references an array with descriptorCount structs that actually
 			configure the descriptors. It depends on the type of descriptor which one of the
 			three you actually need to use. The pBufferInfo field is used for descriptors
 			that refer to buffer data, pImageInfo is used for descriptors that refer to image
 			data, and pTexelBufferView is used for descriptors that refer to buffer views.
-			Our descriptor is based on buffers, so weíre using pBufferInfo.
+			Our descriptor is based on buffers, so we‚Äôre using pBufferInfo.
 			*/
-			descriptorWrite.pBufferInfo = &bufferInfo;
-			descriptorWrite.pImageInfo = nullptr;
-			descriptorWrite.pTexelBufferView = nullptr;
+			descriptorWrites[0].pBufferInfo = &bufferInfo;
+
+			descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[1].dstSet = descriptorSets[i];
+			descriptorWrites[1].dstBinding = 1;
+			descriptorWrites[1].dstArrayElement = 0;
+			descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			descriptorWrites[1].descriptorCount = 1;
+			descriptorWrites[1].pImageInfo = &imageInfo;
 
 			/*
 			The updates are applied using vkUpdateDescriptorSets. It accepts two kinds
@@ -2165,7 +2671,7 @@ private:
 			VkCopyDescriptorSet. The latter can be used to copy descriptors to each other,
 			as its name implies.
 			*/
-			vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+			vkUpdateDescriptorSets(device, descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
 		}
 	}
 
@@ -2178,9 +2684,9 @@ private:
 		/*
 		The level parameter specifies if the allocated command buffers are primary or
 		secondary command buffers.
-		ï VK_COMMAND_BUFFER_LEVEL_PRIMARY: Can be submitted to a queue for
+		‚Ä¢ VK_COMMAND_BUFFER_LEVEL_PRIMARY: Can be submitted to a queue for
 		execution, but cannot be called from other command buffers.
-		ï VK_COMMAND_BUFFER_LEVEL_SECONDARY: Cannot be submitted directly,
+		‚Ä¢ VK_COMMAND_BUFFER_LEVEL_SECONDARY: Cannot be submitted directly,
 		but can be called from primary command buffers. Is helpful to reuse
 		common operations from primary command buffers.
 		*/
@@ -2227,13 +2733,13 @@ private:
 		VkCommandBufferBeginInfo beginInfo{};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		/*
-		The flags parameter specifies how weíre going to use the command buffer. The
+		The flags parameter specifies how we‚Äôre going to use the command buffer. The
 		following values are available:
-		ï VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT: The command
+		‚Ä¢ VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT: The command
 		buffer will be rerecorded right after executing it once.
-		ï VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT: This is a secondary
+		‚Ä¢ VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT: This is a secondary
 		command buffer that will be entirely within a single render pass.
-		ï VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT: The command
+		‚Ä¢ VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT: The command
 		buffer can be resubmitted while it is also already pending execution.
 		*/
 		beginInfo.flags = 0;
@@ -2273,10 +2779,10 @@ private:
 		/*
 		The final parameter controls how the drawing commands
 		within the render pass will be provided. It can have one of two values:
-		ï VK_SUBPASS_CONTENTS_INLINE: The render pass commands will be embedded
+		‚Ä¢ VK_SUBPASS_CONTENTS_INLINE: The render pass commands will be embedded
 		in the primary command buffer itself and no secondary command
 		buffers will be executed.
-		ï VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS: The render pass
+		‚Ä¢ VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS: The render pass
 		commands will be executed from secondary command buffers.
 		*/
 		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -2287,7 +2793,7 @@ private:
 		VkDeviceSize offsets[] = { 0 };
 		vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 		/*
-		You can only have a single index buffer. Itís unfortunately
+		You can only have a single index buffer. It‚Äôs unfortunately
 		not possible to use different indices for each vertex attribute, so we do still
 		have to completely duplicate vertex data even if just one attribute varies.
 		*/
@@ -2323,20 +2829,20 @@ private:
 		descriptors are based on. The next three parameters specify the index of the
 		first descriptor set, the number of sets to bind, and the array of sets to bind.
 		The last two parameters specify an array
-		of offsets that are used for dynamic descriptors. Weíll look at these in a future
+		of offsets that are used for dynamic descriptors. We‚Äôll look at these in a future
 		chapter.
 		*/
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
 			0, 1, &descriptorSets[currentFrame], 0, nullptr);
 		/*
 		The first two parameters
-		specify the number of indices and the number of instances. Weíre not using
+		specify the number of indices and the number of instances. We‚Äôre not using
 		instancing, so just specify 1 instance. The number of indices represents the
 		number of vertices that will be passed to the vertex shader. The next parameter
 		specifies an offset into the index buffer, using a value of 1 would cause the
 		graphics card to start reading at the second index. The second to last parameter
 		specifies an offset to add to the indices in the index buffer. The final parameter
-		specifies an offset for instancing, which weíre not using.
+		specifies an offset for instancing, which we‚Äôre not using.
 		*/
 		vkCmdDrawIndexed(commandBuffer, indices.size(), 1, 0, 0, 0);
 
@@ -2350,11 +2856,11 @@ private:
 
 	/*
 	At a high level, rendering a frame in Vulkan consists of a common set of steps:
-	ï Wait for the previous frame to finish
-	ï Acquire an image from the swap chain
-	ï Record a command buffer which draws the scene onto that image
-	ï Submit the recorded command buffer
-	ï Present the swap chain image
+	‚Ä¢ Wait for the previous frame to finish
+	‚Ä¢ Acquire an image from the swap chain
+	‚Ä¢ Record a command buffer which draws the scene onto that image
+	‚Ä¢ Submit the recorded command buffer
+	‚Ä¢ Present the swap chain image
 	*/
 	void drawFrame()
 	{
@@ -2362,7 +2868,7 @@ private:
 		At the start of the frame, we want to wait until the previous frame has finished,
 		so that the command buffer and semaphores are available to use.
 		The VK_TRUE we pass here indicates that we want to wait for all fences, but in the case of a
-		single one it doesnít matter. This function also has a timeout parameter that
+		single one it doesn‚Äôt matter. This function also has a timeout parameter that
 		we set to the maximum value of a 64 bit unsigned integer, UINT64_MAX, which
 		effectively disables the timeout.
 		*/
@@ -2372,7 +2878,7 @@ private:
 		/*
 		The last parameter specifies a variable to output the index of the swap
 		chain image that has become available. The index refers to the VkImage
-		in our swapChainImages array. Weíre going to use that index to pick the
+		in our swapChainImages array. We‚Äôre going to use that index to pick the
 		VkFrameBuffer
 		*/
 		VkResult result{ 
@@ -2383,10 +2889,10 @@ private:
 		/*
 		The vkAcquireNextImageKHR and vkQueuePresentKHR functions can return the following
 		special values.
-		ï VK_ERROR_OUT_OF_DATE_KHR: The swap chain has become incompatible
+		‚Ä¢ VK_ERROR_OUT_OF_DATE_KHR: The swap chain has become incompatible
 		with the surface and can no longer be used for rendering. Usually happens
 		after a window resize.
-		ï VK_SUBOPTIMAL_KHR: The swap chain can still be used to successfully
+		‚Ä¢ VK_SUBOPTIMAL_KHR: The swap chain can still be used to successfully
 		present to the surface, but the surface properties are no longer matched
 		exactly.
 		*/
@@ -2414,7 +2920,7 @@ private:
 		/*
 		The first three parameters specify which semaphores to wait on before execution
 		begins and in which stage(s) of the pipeline to wait. We want to wait with
-		writing colors to the image until itís available, so weíre specifying the stage of
+		writing colors to the image until it‚Äôs available, so we‚Äôre specifying the stage of
 		the graphics pipeline that writes to the color attachment. That means that
 		theoretically the implementation can already start executing our vertex shader
 		and such while the image is not yet available. Each entry in the waitStages
@@ -2432,7 +2938,7 @@ private:
 		/*
 		The signalSemaphoreCount and pSignalSemaphores parameters specify which
 		semaphores to signal once the command buffer(s) have finished execution. In
-		our case weíre using the renderFinishedSemaphore for that purpose.
+		our case we‚Äôre using the renderFinishedSemaphore for that purpose.
 		*/
 		VkSemaphore signalSemaphores[] = { renderFinishedSemaphores[currentFrame]};
 		submitInfo.signalSemaphoreCount = 1;
@@ -2465,7 +2971,7 @@ private:
 		/*
 		There is one last optional parameter called pResults. It allows you to specify
 		an array of VkResult values to check for every individual swap chain if presentation
-		was successful. Itís not necessary if youíre only using a single swap chain,
+		was successful. It‚Äôs not necessary if you‚Äôre only using a single swap chain,
 		because you can simply use the return value of the present function.
 		*/
 		presentInfo.pResults = nullptr;
@@ -2500,7 +3006,7 @@ private:
 		}
 		/*
 		We first call vkDeviceWaitIdle, because we
-		shouldnít touch resources that may still be in use. Obviously, weíll have to
+		shouldn‚Äôt touch resources that may still be in use. Obviously, we‚Äôll have to
 		recreate the swap chain itself. The image views need to be recreated because
 		they are based directly on the swap chain images. Finally, the framebuffers
 		directly depend on the swap chain images, and thus must be recreated as well.
@@ -2553,7 +3059,7 @@ private:
 		/*
 		GLM was originally designed for OpenGL, where the Y coordinate of the clip
 		coordinates is inverted. The easiest way to compensate for that is to flip the
-		sign on the scaling factor of the Y axis in the projection matrix. If you donít
+		sign on the scaling factor of the Y axis in the projection matrix. If you don‚Äôt
 		do this, then the image will be rendered upside down.
 		*/
 		ubo.proj[1][1] *= -1;
@@ -2570,30 +3076,30 @@ private:
 	/*
 		The first parameter specifies the severity of the message, which is one of the
 		following flags:
-		ï VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: Diagnostic
+		‚Ä¢ VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: Diagnostic
 		message
-		ï VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT: Informational message
+		‚Ä¢ VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT: Informational message
 		like the creation of a resource
-		ï VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT: Message about
+		‚Ä¢ VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT: Message about
 		behavior that is not necessarily an error, but very likely a bug in your
 		application
-		ï VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT: Message about
+		‚Ä¢ VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT: Message about
 		behavior that is invalid and may cause crashes
 
 		The messageType parameter can have the following values:
-		ï VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT: Some event has happened
+		‚Ä¢ VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT: Some event has happened
 		that is unrelated to the specification or performance
-		ï VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT: Something has
+		‚Ä¢ VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT: Something has
 		happened that violates the specification or indicates a possible mistake
-		ï VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT: Potential nonoptimal
+		‚Ä¢ VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT: Potential nonoptimal
 		use of Vulkan
 
 		The pCallbackData parameter refers to a VkDebugUtilsMessengerCallbackDataEXT
 		struct containing the details of the message itself, with the most important
 		members being:
-		ï pMessage: The debug message as a null-terminated string
-		ï pObjects: Array of Vulkan object handles related to the message
-		ï objectCount: Number of objects in array
+		‚Ä¢ pMessage: The debug message as a null-terminated string
+		‚Ä¢ pObjects: Array of Vulkan object handles related to the message
+		‚Ä¢ objectCount: Number of objects in array
 
 		The pUserData parameter contains a pointer that was specified during
 		the setup of the callback and allows you to pass your own data to it.
@@ -2631,8 +3137,8 @@ private:
 	static std::vector<char> readFile(const std::string& filename)
 	{
 		/*
-		ï ate: Start reading at the end of the file
-		ï binary: Read the file as binary file (avoid text transformations)
+		‚Ä¢ ate: Start reading at the end of the file
+		‚Ä¢ binary: Read the file as binary file (avoid text transformations)
 		The advantage of starting to read at the end of the file is that we can use the
 		read position to determine the size of the file and allocate a buffer:
 		*/
