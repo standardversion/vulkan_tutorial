@@ -10,3 +10,4 @@ This repo works through https://vulkan-tutorial.com/
 - [Uniform Buffers and Descriptor Sets](docs/uniform-buffers-descriptor-sets.md)
 - [Texture Mapping](docs/texture-mapping.md)
 - [Depth Buffering](docs/depth-buffering.md)
+- [Generating Mipmaps](docs/generating-mipmaps.md)
