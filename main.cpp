@@ -293,6 +293,7 @@ private:
 	std::vector<VkFence> inFlightFences;
 	bool framebufferResized{ false };
 	uint32_t currentFrame{ 0 };
+	uint32_t mipLevels;
 	VkImage textureImage;
 	VkDeviceMemory textureImageMemory;
 	VkImageView textureImageView;
@@ -1257,7 +1258,7 @@ private:
 		swapChainImageViews.resize(swapChainImages.size());
 		for (size_t i{ 0 }; i < swapChainImages.size(); i++)
 		{
-			swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+			swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 			/*
 			If you were working on a stereographic 3D application, then you would create
 			a swap chain with multiple layers. You could then create multiple image views
@@ -1267,7 +1268,7 @@ private:
 		}
 	}
 
-	VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags)
+	VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels)
 	{
 		VkImageViewCreateInfo viewInfo{};
 		viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1296,7 +1297,7 @@ private:
 		*/
 		viewInfo.subresourceRange.aspectMask = aspectFlags;
 		viewInfo.subresourceRange.baseMipLevel = 0;
-		viewInfo.subresourceRange.levelCount = 1;
+		viewInfo.subresourceRange.levelCount = mipLevels;
 		viewInfo.subresourceRange.baseArrayLayer = 0;
 		viewInfo.subresourceRange.layerCount = 1;
 
@@ -1966,12 +1967,12 @@ private:
 	void createDepthResources()
 	{
 		VkFormat depthFormat{ findDepthFormat() };
-		createImage(swapChainExtent.width, swapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL,
+		createImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat, VK_IMAGE_TILING_OPTIMAL,
 			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			depthImage, depthImageMemory);
-		depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+		depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
 
-		transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+		transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
 	}
 
 	VkFormat findDepthFormat()
@@ -2022,6 +2023,14 @@ private:
 		int texChannels;
 		stbi_uc* pixels{ stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha)};
 		/*
+		This calculates the number of levels in the mip chain. The max function selects
+		the largest dimension. The log2 function calculates how many times that
+		dimension can be divided by 2. The floor function handles cases where the
+		largest dimension is not a power of 2. 1 is added so that the original image has
+		a mip level.
+		*/
+		mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+		/*
 		The pointer that is
 		returned is the first element in an array of pixel values. The pixels are laid out
 		row by row with 4 bytes per pixel in the case of STBI_rgb_alpha for a total of
@@ -2044,8 +2053,20 @@ private:
 		vkUnmapMemory(device, stagingBufferMemory);
 		stbi_image_free(pixels);
 
-		createImage(texWidth, texHeight, VK_FORMAT_R8G8B8A8_SRGB,
-			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+		/*
+		Our texture image now has multiple mip levels, but the staging buffer can only
+		be used to fill mip level 0. The other levels are still undefined. To fill these
+		levels we need to generate the data from the single level that we have. We will
+		use the vkCmdBlitImage command. This command performs copying, scaling,
+		and filtering operations. We will call this multiple times to blit data to each
+		level of our texture image.
+		vkCmdBlitImage is considered a transfer operation, so we must inform Vulkan
+		that we intend to use the texture image as both the source and destination
+		of a transfer. Add VK_IMAGE_USAGE_TRANSFER_SRC_BIT to the texture image’s
+		usage flags in createTextureImage
+		*/
+		createImage(texWidth, texHeight, mipLevels, VK_FORMAT_R8G8B8A8_SRGB,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT |VK_IMAGE_USAGE_TRANSFER_DST_BIT |
 			VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
 
 		/*
@@ -2054,19 +2075,169 @@ private:
 		• Transition the texture image to VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
 		• Execute the buffer to image copy operation
 		*/
-		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
 		copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight);
+
+		//transitioned to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL while generating mipmaps
 		/*
 		To be able to start sampling from the texture image in the shader, we need one
 		last transition to prepare it for shader access
+		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, mipLevels);
 		*/
-		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
+		generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
 		vkDestroyBuffer(device, stagingBuffer, nullptr);
 		vkFreeMemory(device, stagingBufferMemory, nullptr);
 	}
 
-	void createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling,
+	void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels)
+	{
+		/*
+		It is very convenient to use a built-in function like vkCmdBlitImage to generate
+		all the mip levels, but unfortunately it is not guaranteed to be supported on all
+		platforms. It requires the texture image format we use to support linear filtering,
+		which can be checked with the vkGetPhysicalDeviceFormatProperties
+		function.
+		*/
+		VkFormatProperties formatProperties{};
+		vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, &formatProperties);
+		if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+		{
+			throw std::runtime_error("texture image format does not support liner blitting!");
+		}
+
+		VkCommandBuffer commandBuffer{ beginSingleTimeCommands() };
+
+		VkImageMemoryBarrier barrier{};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.image = image;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.layerCount = 1;
+
+		int32_t mipWidth{ texWidth };
+		int32_t mipHeight{ texHeight };
+
+		/*
+		This loop will record each of the VkCmdBlitImage commands. Note that the
+		loop variable starts at 1, not 0.
+		*/
+		for (uint32_t i{ 1 }; i < mipLevels; i++)
+		{
+			barrier.subresourceRange.baseMipLevel = i - 1;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+			/*
+			First, we transition level i - 1 to VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
+			This transition will wait for level i - 1 to be filled, either from the previous
+			blit command, or from vkCmdCopyBufferToImage. The current blit command
+			will wait on this transition.
+			*/
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+				0,
+				0, nullptr,
+				0, nullptr,
+				1, &barrier);
+
+			/*
+			Next, we specify the regions that will be used in the blit operation. The source
+			mip level is i - 1 and the destination mip level is i. The two elements of
+			the srcOffsets array determine the 3D region that data will be blitted from.
+			dstOffsets determines the region that data will be blitted to. The X and Y
+			dimensions of the dstOffsets[1] are divided by two since each mip level is
+			half the size of the previous level. The Z dimension of srcOffsets[1] and
+			dstOffsets[1] must be 1, since a 2D image has a depth of 1.
+			*/
+			VkImageBlit blit{};
+			blit.srcOffsets[0] = { 0, 0, 0 };
+			blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+			blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.srcSubresource.mipLevel = i - 1;
+			blit.srcSubresource.baseArrayLayer = 0;
+			blit.srcSubresource.layerCount = 1;
+			blit.dstOffsets[0] = { 0, 0, 0 };
+			blit.dstOffsets[1] = { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 };
+			blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.dstSubresource.mipLevel = i;
+			blit.dstSubresource.baseArrayLayer = 0;
+			blit.dstSubresource.layerCount = 1;
+
+			/*
+			Now, we record the blit command. Note that textureImage is used for both
+			the srcImage and dstImage parameter. This is because we’re blitting between
+			different levels of the same image. The source mip level was just transitioned
+			to VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL and the destination level is still
+			in VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL from createTextureImage.
+			Beware if you are using a dedicated transfer queue (as suggested in Vertex
+			buffers): vkCmdBlitImage must be submitted to a queue with graphics capability.
+			The last parameter allows us to specify a VkFilter to use in the blit. We have
+			the same filtering options here that we had when making the VkSampler. We
+			use the VK_FILTER_LINEAR to enable interpolation.
+			*/
+			vkCmdBlitImage(commandBuffer,
+				image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				1, &blit,
+				VK_FILTER_LINEAR);
+
+			/*
+			This barrier transitions mip level i - 1 to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
+			This transition waits on the current blit command to finish. All sampling
+			operations will wait on this transition to finish.
+			*/
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+			vkCmdPipelineBarrier(commandBuffer,
+				VK_PIPELINE_STAGE_TRANSFER_BIT,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+				0, nullptr,
+				0, nullptr,
+				1, &barrier);
+
+			/*
+			At the end of the loop, we divide the current mip dimensions by two. We check
+			each dimension before the division to ensure that dimension never becomes 0.
+			This handles cases where the image is not square, since one of the mip dimensions
+			would reach 1 before the other dimension. When this happens, that dimension
+			should remain 1 for all remaining levels.
+			*/
+			if (mipWidth > 1) mipWidth /= 2;
+			if (mipHeight > 1) mipHeight /= 2;
+		}
+
+		/*
+		Before we end the command buffer, we insert one more pipeline barrier. This barrier
+		transitions the last mip level from VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+		to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL. This wasn’t handled by
+		the loop, since the last mip level is never blitted from.
+		*/
+		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+		vkCmdPipelineBarrier(commandBuffer,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+			0, nullptr,
+			0, nullptr,
+			1, &barrier);
+
+		endSingleTimeCommands(commandBuffer);
+	}
+
+	void createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkFormat format, VkImageTiling tiling,
 		VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image,
 		VkDeviceMemory& imageMemory)
 	{
@@ -2087,7 +2258,7 @@ private:
 		imageInfo.extent.width = width;
 		imageInfo.extent.height = height;
 		imageInfo.extent.depth = 1;
-		imageInfo.mipLevels = 1;
+		imageInfo.mipLevels = mipLevels;
 		imageInfo.arrayLayers = 1;
 		imageInfo.format = format;
 		/*
@@ -2166,7 +2337,8 @@ private:
 		vkBindImageMemory(device, image, imageMemory, 0);
 	}
 
-	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout)
+	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout,
+		VkImageLayout newLayout, uint32_t mipLevels)
 	{
 		VkCommandBuffer commandBuffer{ beginSingleTimeCommands() };
 		/*
@@ -2346,7 +2518,7 @@ private:
 
 	void createTextureImageView()
 	{
-		textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+		textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
 	}
 
 	void createTextureSampler()
@@ -2419,7 +2591,7 @@ private:
 		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 		samplerInfo.mipLodBias = 0.0f;
 		samplerInfo.minLod = 0.0f;
-		samplerInfo.maxLod = 0.0f;
+		samplerInfo.maxLod = static_cast<float>(mipLevels);
 
 		if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS)
 		{
