@@ -1,5 +1,7 @@
 #version 450
 
+//uniform is a general GLSL keyword for global variables set by the CPU
+//I'm using a read-only 2D texture sampler, and it is bound at binding = 1
 layout(binding = 1) uniform sampler2D texSampler;
 // Declares an input variable from the vertex shader:
 // Matches the location = 0 output from the vertex shader.
